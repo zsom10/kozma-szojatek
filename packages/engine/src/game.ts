@@ -246,6 +246,8 @@ export function playMove(
       playerId: player.id,
       playerName: player.name,
       placements: validated.move.placements,
+      kind: "place",
+      score: validated.move.score,
     },
   };
 
@@ -269,7 +271,8 @@ export function playMove(
 export function passTurn(
   state: GameState,
   playerId: string,
-  rules: Rules = { ...DEFAULT_RULES, endMode: state.endMode }
+  rules: Rules = { ...DEFAULT_RULES, endMode: state.endMode },
+  kind: "pass" | "timeout" = "pass"
 ): GameState {
   if (state.status !== "playing") throw new Error("Nincs aktív játszma.");
   const idx = state.currentPlayerIndex;
@@ -285,6 +288,13 @@ export function passTurn(
     ...state,
     consecutivePasses: state.consecutivePasses + 1,
     moveCount: state.moveCount + 1,
+    lastMove: {
+      playerId: player.id,
+      playerName: player.name,
+      placements: [],
+      kind,
+      score: 0,
+    },
   };
   const activeCount = activeIndices(next).length;
   const roundsNeeded =
@@ -320,6 +330,13 @@ export function resignTurn(
     players,
     consecutivePasses: 0,
     moveCount: state.moveCount + 1,
+    lastMove: {
+      playerId: player.id,
+      playerName: player.name,
+      placements: [],
+      kind: "resign",
+      score: 0,
+    },
   };
   next = finalizeModeBIfDone(next, rules);
   if (next.status === "finished") return next;
@@ -331,7 +348,12 @@ export function timeoutPass(state: GameState, rules?: Rules): GameState {
   if (now() < state.turnDeadlineAt) return state;
   const player = state.players[state.currentPlayerIndex];
   if (!player) return state;
-  return passTurn(state, player.id, rules ?? { ...DEFAULT_RULES, endMode: state.endMode });
+  return passTurn(
+    state,
+    player.id,
+    rules ?? { ...DEFAULT_RULES, endMode: state.endMode },
+    "timeout"
+  );
 }
 
 function normTile(letter: string): string {
@@ -414,6 +436,13 @@ export function exchangeTiles(
     players,
     consecutivePasses: 0,
     moveCount: state.moveCount + 1,
+    lastMove: {
+      playerId: player.id,
+      playerName: player.name,
+      placements: [],
+      kind: "exchange",
+      score: 0,
+    },
   };
   return advanceTurn(next, idx);
 }

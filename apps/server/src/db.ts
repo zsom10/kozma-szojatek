@@ -112,6 +112,23 @@ function migrate(database: DatabaseSync): void {
     "INSERT OR REPLACE INTO app_meta(key, value) VALUES('app_version', ?)"
   ).run(APP_VERSION);
   migrateGamePlayersPk(database);
+  migrateAdminColumn(database);
+}
+
+function migrateAdminColumn(database: DatabaseSync): void {
+  const cols = database.prepare("PRAGMA table_info(users)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "is_admin")) {
+    database.exec("ALTER TABLE users ADD COLUMN is_admin INTEGER NOT NULL DEFAULT 0");
+  }
+  const raw = process.env.ADMIN_NAMES ?? "zsom10";
+  for (const name of raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)) {
+    database
+      .prepare("UPDATE users SET is_admin = 1 WHERE name = ? COLLATE NOCASE")
+      .run(name);
+  }
 }
 
 function migrateGamePlayersPk(database: DatabaseSync): void {
@@ -147,6 +164,7 @@ export type UserRow = {
   ui_scale: string;
   created_at: number;
   last_seen_at: number;
+  is_admin?: number;
 };
 
 export function registerUser(name: string, password: string): UserRow {
@@ -458,13 +476,82 @@ export function appVersion(): string {
   return row?.value ?? APP_VERSION;
 }
 
+export function isAdminUser(user: { name: string; is_admin?: number | boolean | null }): boolean {
+  if (Number(user.is_admin) === 1 || user.is_admin === true) return true;
+  const raw = process.env.ADMIN_NAMES ?? "zsom10";
+  const allowed = raw
+    .split(",")
+    .map((s) => s.trim().toLocaleLowerCase("hu"))
+    .filter(Boolean);
+  return allowed.includes(user.name.trim().toLocaleLowerCase("hu"));
+}
+
 export function isAdminName(name: string): boolean {
+  const user = getDb()
+    .prepare("SELECT name, is_admin FROM users WHERE name = ? COLLATE NOCASE")
+    .get(name.trim()) as { name: string; is_admin?: number } | undefined;
+  if (user) return isAdminUser(user);
   const raw = process.env.ADMIN_NAMES ?? "zsom10";
   const allowed = raw
     .split(",")
     .map((s) => s.trim().toLocaleLowerCase("hu"))
     .filter(Boolean);
   return allowed.includes(name.trim().toLocaleLowerCase("hu"));
+}
+
+export function adminCreateUser(name: string, password: string, isAdmin = false): UserRow {
+  if (name.trim().length < 2) throw new Error("A név legalább 2 karakter.");
+  if (password.length < 4) throw new Error("A jelszó legalább 4 karakter.");
+  const user = registerUser(name, password);
+  if (isAdmin) {
+    getDb().prepare("UPDATE users SET is_admin = 1 WHERE id = ?").run(user.id);
+  }
+  return getUserById(user.id)!;
+}
+
+export function adminUpdateUser(
+  id: string,
+  patch: { name?: string; password?: string; isAdmin?: boolean },
+  actorId: string
+): UserRow {
+  const database = getDb();
+  const user = getUserById(id);
+  if (!user) throw new Error("Nincs ilyen felhasználó.");
+  if (patch.name != null) {
+    const name = patch.name.trim();
+    if (name.length < 2) throw new Error("A név legalább 2 karakter.");
+    try {
+      database.prepare("UPDATE users SET name = ? WHERE id = ?").run(name, id);
+    } catch {
+      throw new Error("Ez a név már foglalt.");
+    }
+  }
+  if (patch.password != null && patch.password.length > 0) {
+    if (patch.password.length < 4) throw new Error("A jelszó legalább 4 karakter.");
+    database
+      .prepare("UPDATE users SET password_hash = ? WHERE id = ?")
+      .run(bcrypt.hashSync(patch.password, 10), id);
+  }
+  if (patch.isAdmin != null) {
+    if (id === actorId && !patch.isAdmin) {
+      throw new Error("Saját admin jogodat nem veheted el.");
+    }
+    database
+      .prepare("UPDATE users SET is_admin = ? WHERE id = ?")
+      .run(patch.isAdmin ? 1 : 0, id);
+  }
+  return getUserById(id)!;
+}
+
+export function adminDeleteUser(id: string, actorId: string): void {
+  if (id === actorId) throw new Error("Saját magadat nem törölheted.");
+  const database = getDb();
+  const user = getUserById(id);
+  if (!user) throw new Error("Nincs ilyen felhasználó.");
+  database.prepare("DELETE FROM sessions WHERE user_id = ?").run(id);
+  database.prepare("DELETE FROM user_stats WHERE user_id = ?").run(id);
+  database.prepare("UPDATE user_words SET added_by = NULL WHERE added_by = ?").run(id);
+  database.prepare("DELETE FROM users WHERE id = ?").run(id);
 }
 
 export function getAdminStats() {
@@ -485,7 +572,7 @@ export function getAdminStats() {
 
   const users = database
     .prepare(
-      `SELECT u.id, u.name,
+      `SELECT u.id, u.name, COALESCE(u.is_admin, 0) AS is_admin,
               datetime(u.created_at/1000, 'unixepoch', 'localtime') AS created,
               datetime(u.last_seen_at/1000, 'unixepoch', 'localtime') AS last_seen,
               COALESCE(s.games, 0) AS games,

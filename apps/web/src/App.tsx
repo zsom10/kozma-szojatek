@@ -27,7 +27,20 @@ const SCALE_STEPS: { id: UiScale; label: string }[] = [
   { id: "xxlarge", label: "Hatalmas" },
 ];
 
-type AuthUser = { id: string; name: string; uiScale: UiScale };
+type AuthUser = { id: string; name: string; uiScale: UiScale; isAdmin?: boolean };
+
+function lastMoveText(lm: {
+  playerName: string;
+  kind?: string;
+  score?: number;
+}): string {
+  if (lm.kind === "timeout") return `${lm.playerName} (kicsúszott az időből)`;
+  if (lm.kind === "pass" || lm.kind === "exchange") return `${lm.playerName} (passzolt)`;
+  if (lm.kind === "resign") return `${lm.playerName} (feladta)`;
+  if (lm.kind === "place") return `${lm.playerName} (+${lm.score ?? 0} pont)`;
+  if (lm.score != null) return `${lm.playerName} (+${lm.score} pont)`;
+  return lm.playerName;
+}
 
 type WordChallenge = {
   id: string;
@@ -204,7 +217,14 @@ export function App() {
   const [invite, setInvite] = useState<InviteInfo | null>(null);
   const [chatText, setChatText] = useState("");
   const [iAmAvailable, setIAmAvailable] = useState(true);
+  const [adminName, setAdminName] = useState("");
+  const [adminPass, setAdminPass] = useState("");
+  const [adminMakeAdmin, setAdminMakeAdmin] = useState(false);
+  const [editUserId, setEditUserId] = useState<string | null>(null);
+  const [editName, setEditName] = useState("");
+  const [editPass, setEditPass] = useState("");
   const boardRef = useRef<HTMLDivElement>(null);
+  const chatLogRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
 
   function applyIncomingGame(
@@ -298,12 +318,23 @@ export function App() {
     if (!token) return;
     try {
       const data = await api("/api/me");
+      const isAdmin = !!data.isAdmin;
       setProfile({
         curiosities: data.curiosities ?? [],
         history: data.history ?? [],
-        isAdmin: !!data.isAdmin,
+        isAdmin,
       });
       if (data.user?.uiScale) setUiScale(data.user.uiScale);
+      setAuth((prev) => {
+        if (!prev) return prev;
+        if (prev.user.isAdmin === isAdmin) return prev;
+        const next = {
+          ...prev,
+          user: { ...prev.user, isAdmin },
+        };
+        saveAuth(next.token, next.user);
+        return next;
+      });
     } catch {
       /* ignore */
     }
@@ -331,6 +362,7 @@ export function App() {
         id: data.user.id,
         name: data.user.name,
         uiScale: data.user.uiScale || "normal",
+        isAdmin: !!data.user.isAdmin,
       };
       saveAuth(data.token, nextUser);
       setAuth({ token: data.token, user: nextUser });
@@ -338,14 +370,13 @@ export function App() {
       setVersion(data.version ?? "1.0.0");
       setScreen("lobby");
       setPassInput("");
+      setProfile((p) => ({
+        curiosities: p?.curiosities ?? [],
+        history: p?.history ?? [],
+        isAdmin: !!data.user.isAdmin,
+      }));
       queueMicrotask(() => {
-        void api("/api/me").then((me) => {
-          setProfile({
-            curiosities: me.curiosities ?? [],
-            history: me.history ?? [],
-            isAdmin: !!me.isAdmin,
-          });
-        }).catch(() => undefined);
+        void refreshProfile();
       });
     } catch (e) {
       setError((e as Error).message);
@@ -424,6 +455,16 @@ export function App() {
       if (wsRef.current === socket) wsRef.current = null;
     };
   }, [token, refreshLeaderboard, refreshProfile]);
+
+  useEffect(() => {
+    if (token) void refreshProfile();
+  }, [token, refreshProfile]);
+
+  useEffect(() => {
+    const el = chatLogRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [tableMeta?.chat]);
 
   useEffect(() => {
     if (screen === "lobby") refreshTables();
@@ -958,7 +999,7 @@ export function App() {
           <button className="secondary nav-extra" type="button" onClick={() => setScreen("settings")}>
             Beállítások
           </button>
-          {profile?.isAdmin && (
+          {(user?.isAdmin || profile?.isAdmin) && (
             <button className="secondary" type="button" onClick={() => setScreen("admin")}>
               Admin
             </button>
@@ -1163,7 +1204,7 @@ export function App() {
 
       {screen === "admin" && (
         <div className="admin-page">
-          {!profile?.isAdmin ? (
+          {!(user?.isAdmin || profile?.isAdmin) ? (
             <section className="panel">
               <p className="meta">Nincs admin jogod.</p>
             </section>
@@ -1199,37 +1240,203 @@ export function App() {
                 ))}
               </div>
 
-              <div className="split admin-split">
-                <section className="panel">
-                  <h3 className="panel-title">Felhasználók</h3>
-                  <div className="admin-table-wrap">
-                    <table className="admin-table">
-                      <thead>
-                        <tr>
-                          <th>Név</th>
-                          <th>Meccs</th>
-                          <th>Győzelem</th>
-                          <th>Legjobb</th>
-                          <th>Szavak</th>
-                          <th>Utoljára</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {adminStats.users.map((u) => (
-                          <tr key={String(u.id)}>
-                            <td>{String(u.name)}</td>
+              <section className="panel">
+                <h3 className="panel-title">Felhasználók kezelése</h3>
+                <div className="admin-create">
+                  <div className="field">
+                    <label>Új név</label>
+                    <input value={adminName} onChange={(e) => setAdminName(e.target.value)} />
+                  </div>
+                  <div className="field">
+                    <label>Jelszó</label>
+                    <input
+                      type="password"
+                      value={adminPass}
+                      onChange={(e) => setAdminPass(e.target.value)}
+                    />
+                  </div>
+                  <label className="admin-check">
+                    <input
+                      type="checkbox"
+                      checked={adminMakeAdmin}
+                      onChange={(e) => setAdminMakeAdmin(e.target.checked)}
+                    />
+                    Admin jog
+                  </label>
+                  <button
+                    type="button"
+                    disabled={busy === "admin-create"}
+                    onClick={() => {
+                      void (async () => {
+                        setBusy("admin-create");
+                        try {
+                          await api("/api/admin/users", {
+                            method: "POST",
+                            body: JSON.stringify({
+                              name: adminName,
+                              password: adminPass,
+                              isAdmin: adminMakeAdmin,
+                            }),
+                          });
+                          setAdminName("");
+                          setAdminPass("");
+                          setAdminMakeAdmin(false);
+                          await refreshAdmin();
+                        } catch (e) {
+                          setError((e as Error).message);
+                        } finally {
+                          setBusy("");
+                        }
+                      })();
+                    }}
+                  >
+                    Felhasználó létrehozása
+                  </button>
+                </div>
+                <div className="admin-table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Név</th>
+                        <th>Admin</th>
+                        <th>Meccs</th>
+                        <th>Győzelem</th>
+                        <th>Legjobb</th>
+                        <th>Utoljára</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminStats.users.map((u) => {
+                        const id = String(u.id);
+                        const editing = editUserId === id;
+                        return (
+                          <tr key={id}>
+                            <td>
+                              {editing ? (
+                                <input value={editName} onChange={(e) => setEditName(e.target.value)} />
+                              ) : (
+                                String(u.name)
+                              )}
+                            </td>
+                            <td>{Number(u.is_admin) ? "igen" : "nem"}</td>
                             <td>{String(u.games)}</td>
                             <td>{String(u.wins)}</td>
                             <td>{String(u.best_score)}</td>
-                            <td>{String(u.words_added)}</td>
                             <td>{String(u.last_seen)}</td>
+                            <td>
+                              <div className="admin-row-actions">
+                                {editing ? (
+                                  <>
+                                    <input
+                                      type="password"
+                                      placeholder="Új jelszó (opcionális)"
+                                      value={editPass}
+                                      onChange={(e) => setEditPass(e.target.value)}
+                                    />
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      onClick={() => {
+                                        void (async () => {
+                                          try {
+                                            await api(`/api/admin/users/${id}`, {
+                                              method: "PATCH",
+                                              body: JSON.stringify({
+                                                name: editName,
+                                                password: editPass || undefined,
+                                              }),
+                                            });
+                                            setEditUserId(null);
+                                            setEditPass("");
+                                            await refreshAdmin();
+                                          } catch (e) {
+                                            setError((e as Error).message);
+                                          }
+                                        })();
+                                      }}
+                                    >
+                                      Mentés
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      onClick={() => {
+                                        setEditUserId(null);
+                                        setEditPass("");
+                                      }}
+                                    >
+                                      Mégse
+                                    </button>
+                                  </>
+                                ) : (
+                                  <>
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      onClick={() => {
+                                        setEditUserId(id);
+                                        setEditName(String(u.name));
+                                        setEditPass("");
+                                      }}
+                                    >
+                                      Szerkeszt
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="secondary"
+                                      onClick={() => {
+                                        void (async () => {
+                                          try {
+                                            await api(`/api/admin/users/${id}`, {
+                                              method: "PATCH",
+                                              body: JSON.stringify({
+                                                isAdmin: !Number(u.is_admin),
+                                              }),
+                                            });
+                                            await refreshAdmin();
+                                          } catch (e) {
+                                            setError((e as Error).message);
+                                          }
+                                        })();
+                                      }}
+                                    >
+                                      {Number(u.is_admin) ? "Admin elvétele" : "Adminná tesz"}
+                                    </button>
+                                    {id !== user?.id && (
+                                      <button
+                                        type="button"
+                                        className="secondary"
+                                        onClick={() => {
+                                          if (!confirm(`Törlöd: ${String(u.name)}?`)) return;
+                                          void (async () => {
+                                            try {
+                                              await api(`/api/admin/users/${id}`, {
+                                                method: "DELETE",
+                                              });
+                                              await refreshAdmin();
+                                            } catch (e) {
+                                              setError((e as Error).message);
+                                            }
+                                          })();
+                                        }}
+                                      >
+                                        Törlés
+                                      </button>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </td>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </section>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
 
+              <div className="split admin-split">
                 <section className="panel">
                   <h3 className="panel-title">Top játékosok</h3>
                   <div className="admin-table-wrap">
@@ -1586,7 +1793,7 @@ export function App() {
                     )}
                     {state.lastMove && (
                       <p className="meta center last-move-hint">
-                        Utolsó lépés: {state.lastMove.playerName}
+                        Utolsó lépés: {lastMoveText(state.lastMove)}
                       </p>
                     )}
                     <div className="play-dock">
@@ -1839,7 +2046,7 @@ export function App() {
               <div className="panel-title" style={{ fontSize: "1rem", marginBottom: "0.4rem" }}>
                 Chat
               </div>
-              <div className="chat-log">
+              <div className="chat-log" ref={chatLogRef}>
                 {(tableMeta.chat ?? []).length === 0 && (
                   <p className="meta">Még nincs üzenet.</p>
                 )}
@@ -1876,6 +2083,12 @@ export function App() {
             : ""
         }
         name={user?.name}
+        awayFromTable={screen !== "table" && !!activeTableId && state?.status === "playing"}
+        onReturnToGame={() => {
+          if (activeTableId == null) return;
+          setScreen("table");
+          wsAttach("resume", activeTableId);
+        }}
       />
       <ConfettiBurst
         active={!!state && state.status === "finished" && screen === "table"}

@@ -58,6 +58,8 @@ export type GameState = {
     playerId: string;
     playerName: string;
     placements: Placement[];
+    kind?: "place" | "pass" | "timeout" | "exchange" | "resign";
+    score?: number;
   } | null;
   mustPlayBlank?: boolean;
 };

@@ -4,9 +4,17 @@ type TurnBannerProps = {
   show: boolean;
   epoch: string;
   name?: string;
+  awayFromTable?: boolean;
+  onReturnToGame?: () => void;
 };
 
-export function TurnBanner({ show, epoch, name }: TurnBannerProps) {
+export function TurnBanner({
+  show,
+  epoch,
+  name,
+  awayFromTable = false,
+  onReturnToGame,
+}: TurnBannerProps) {
   const [visible, setVisible] = useState(false);
   const [key, setKey] = useState(0);
   const prevShow = useRef(false);
@@ -20,19 +28,34 @@ export function TurnBanner({ show, epoch, name }: TurnBannerProps) {
       setVisible(false);
       return;
     }
+    if (awayFromTable) {
+      setVisible(true);
+      if (rising) setKey((k) => k + 1);
+      return;
+    }
     if (!rising) return;
     setKey((k) => k + 1);
     setVisible(true);
     const hide = window.setTimeout(() => setVisible(false), 2200);
     return () => window.clearTimeout(hide);
-  }, [show, epoch]);
+  }, [show, epoch, awayFromTable]);
 
   if (!visible) return null;
 
   return (
-    <div className="fx-turn" key={key} role="status" aria-live="polite">
+    <div
+      className={`fx-turn ${awayFromTable && onReturnToGame ? "has-action" : ""}`}
+      key={key}
+      role="status"
+      aria-live="polite"
+    >
       <div className="fx-turn-card">
         <strong>Te jössz{name ? `, ${name}` : ""}!</strong>
+        {awayFromTable && onReturnToGame && (
+          <button type="button" className="fx-turn-btn" onClick={onReturnToGame}>
+            Vissza a játékba
+          </button>
+        )}
       </div>
     </div>
   );

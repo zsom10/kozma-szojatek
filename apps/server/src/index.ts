@@ -24,8 +24,11 @@ import {
   getLeaderboard,
   getUserProfile,
   appVersion,
-  isAdminName,
+  isAdminUser,
   getAdminStats,
+  adminCreateUser,
+  adminUpdateUser,
+  adminDeleteUser,
 } from "./db.js";
 import {
   initTables,
@@ -161,7 +164,12 @@ app.post("/api/auth/register", (req, res) => {
     const { token } = loginUser(name, password);
     res.json({
       token,
-      user: { id: user.id, name: user.name, uiScale: user.ui_scale },
+      user: {
+        id: user.id,
+        name: user.name,
+        uiScale: user.ui_scale,
+        isAdmin: isAdminUser(user),
+      },
       version: APP_VERSION,
     });
   } catch (e) {
@@ -177,7 +185,12 @@ app.post("/api/auth/login", (req, res) => {
     );
     res.json({
       token,
-      user: { id: user.id, name: user.name, uiScale: user.ui_scale },
+      user: {
+        id: user.id,
+        name: user.name,
+        uiScale: user.ui_scale,
+        isAdmin: isAdminUser(user),
+      },
       version: APP_VERSION,
     });
   } catch (e) {
@@ -191,7 +204,7 @@ app.get("/api/me", (req, res) => {
     const profile = getUserProfile(user.id);
     res.json({
       ...profile,
-      isAdmin: isAdminName(user.name),
+      isAdmin: isAdminUser(user),
     });
   } catch (e) {
     res.status(401).json({ error: (e as Error).message });
@@ -201,13 +214,82 @@ app.get("/api/me", (req, res) => {
 app.get("/api/admin/stats", (req, res) => {
   try {
     const user = requireUser(req);
-    if (!isAdminName(user.name)) {
+    if (!isAdminUser(user)) {
       res.status(403).json({ error: "Nincs admin jog." });
       return;
     }
     res.json(getAdminStats());
   } catch (e) {
     res.status(401).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/admin/users", (req, res) => {
+  try {
+    const actor = requireUser(req);
+    if (!isAdminUser(actor)) {
+      res.status(403).json({ error: "Nincs admin jog." });
+      return;
+    }
+    const created = adminCreateUser(
+      String(req.body?.name ?? ""),
+      String(req.body?.password ?? ""),
+      !!req.body?.isAdmin
+    );
+    res.json({
+      ok: true,
+      user: {
+        id: created.id,
+        name: created.name,
+        isAdmin: isAdminUser(created),
+      },
+    });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.patch("/api/admin/users/:id", (req, res) => {
+  try {
+    const actor = requireUser(req);
+    if (!isAdminUser(actor)) {
+      res.status(403).json({ error: "Nincs admin jog." });
+      return;
+    }
+    const updated = adminUpdateUser(
+      String(req.params.id),
+      {
+        name: req.body?.name != null ? String(req.body.name) : undefined,
+        password: req.body?.password != null ? String(req.body.password) : undefined,
+        isAdmin:
+          req.body?.isAdmin === undefined ? undefined : !!req.body.isAdmin,
+      },
+      actor.id
+    );
+    res.json({
+      ok: true,
+      user: {
+        id: updated.id,
+        name: updated.name,
+        isAdmin: isAdminUser(updated),
+      },
+    });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.delete("/api/admin/users/:id", (req, res) => {
+  try {
+    const actor = requireUser(req);
+    if (!isAdminUser(actor)) {
+      res.status(403).json({ error: "Nincs admin jog." });
+      return;
+    }
+    adminDeleteUser(String(req.params.id), actor.id);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
   }
 });
 

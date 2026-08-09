@@ -259,9 +259,45 @@ button:disabled {
   background: rgba(31, 92, 69, 0.1);
 }
 
-.admin-page {
-  display: grid;
-  gap: 1rem;
+.admin-create {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.65rem;
+  align-items: end;
+  margin-bottom: 0.9rem;
+}
+
+.admin-create .field {
+  margin: 0;
+  min-width: 140px;
+}
+
+.admin-check {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  font-size: 0.9rem;
+  padding-bottom: 0.35rem;
+}
+
+.admin-row-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  align-items: center;
+}
+
+.admin-row-actions input {
+  min-width: 120px;
+  padding: 0.35rem 0.5rem;
+  border: 1.5px solid var(--line);
+  border-radius: 8px;
+  background: #fffaf3;
+}
+
+.admin-row-actions button {
+  padding: 0.35rem 0.55rem;
+  font-size: 0.8rem;
 }
 
 .admin-head {
@@ -419,9 +455,15 @@ button:disabled {
   animation: fx-fade-in 0.25s ease both;
 }
 
+.fx-turn.has-action {
+  pointer-events: auto;
+  background: rgba(20, 16, 12, 0.28);
+}
+
 .fx-turn-card {
   display: grid;
   justify-items: center;
+  gap: 0.75rem;
   min-width: min(280px, 88vw);
   padding: 1.15rem 1.7rem;
   border-radius: 18px;
@@ -433,6 +475,11 @@ button:disabled {
     0 0 0 5px rgba(31, 92, 69, 0.12);
   animation: fx-slide-up 0.7s cubic-bezier(0.22, 1.15, 0.36, 1) both;
   text-align: center;
+  pointer-events: auto;
+}
+
+.fx-turn-btn {
+  margin-top: 0.15rem;
 }
 
 .fx-turn-card strong {
