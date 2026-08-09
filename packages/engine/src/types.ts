@@ -54,6 +54,12 @@ export type GameState = {
   createdAt: number;
   endMode: EndMode;
   tableId?: number;
+  lastMove?: {
+    playerId: string;
+    playerName: string;
+    placements: Placement[];
+  } | null;
+  mustPlayBlank?: boolean;
 };
 
 export type PublicPlayer = Omit<PlayerState, "rack"> & {

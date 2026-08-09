@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
-import { APP_VERSION } from "@szorako/engine";
+import { APP_VERSION, tokenizeWord, tilesToWord } from "@szorako/engine";
 import type { BotDifficulty, EndMode, GameState } from "@szorako/engine";
 import bcrypt from "bcryptjs";
 import { nanoid } from "nanoid";
@@ -222,7 +222,9 @@ export function addUserWords(words: string[], userId?: string): string[] {
     "INSERT OR IGNORE INTO user_words(word, added_by, created_at) VALUES(?,?,?)"
   );
   for (const w of words) {
-    const key = w.toLocaleUpperCase("hu").normalize("NFC");
+    const tiles = tokenizeWord(String(w));
+    if (!tiles || tiles.length < 2) continue;
+    const key = tilesToWord(tiles);
     const info = insert.run(key, userId ?? null, Date.now());
     if (Number(info.changes) > 0) {
       added.push(key);
@@ -231,9 +233,11 @@ export function addUserWords(words: string[], userId?: string): string[] {
           .prepare("UPDATE user_stats SET words_added = words_added + 1 WHERE user_id = ?")
           .run(userId);
       }
+    } else {
+      added.push(key);
     }
   }
-  return added;
+  return [...new Set(added)];
 }
 
 export function saveGameState(game: GameState, vsAi: boolean): void {

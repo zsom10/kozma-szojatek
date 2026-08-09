@@ -567,16 +567,16 @@ export function App() {
   async function submitPass() {
     if (!tableMeta || !state) return;
     const mePlayer = state.players.find((p) => p.id === user?.id);
-    const canExchange =
-      !!mePlayer && state.bagCount >= (mePlayer.rackCount || myRack.length);
+    const rackLen = mePlayer?.rackCount || myRack.length;
+    const canExchange = state.bagCount > 0 && state.bagCount >= rackLen;
     let exchangeAll = false;
-    if (canExchange) {
+    if (state.bagCount === 0) {
+      if (!confirm("Passzolsz? (A zsák üres, betűt cserélni nem lehet.)")) return;
+    } else if (canExchange) {
       exchangeAll = confirm(
         "Passzolsz.\n\nKicseréljem az összes betűdet a zsákból? (OK = csere, Mégse = csak passz)"
       );
-    } else if (
-      !confirm("Passzolsz? (A zsákban nincs elég betű a teljes cseréhez.)")
-    ) {
+    } else if (!confirm("Passzolsz? (Nincs elég betű a zsákban a teljes cseréhez.)")) {
       return;
     }
     try {
@@ -1275,6 +1275,9 @@ export function App() {
                         const show = cell ?? (draft
                           ? { letter: draft.letter, isBlank: draft.isBlank }
                           : null);
+                        const isLast = !!state.lastMove?.placements.some(
+                          (p) => p.row === r && p.col === c
+                        );
                         return (
                           <div
                             key={`${r}-${c}`}
@@ -1289,7 +1292,9 @@ export function App() {
                             }}
                           >
                             {show ? (
-                              <div className={`tile ${draft ? "draft" : ""} ${show.isBlank ? "blank" : ""}`}>
+                              <div
+                                className={`tile ${draft ? "draft" : ""} ${show.isBlank ? "blank" : ""} ${isLast ? "last-move" : ""}`}
+                              >
                                 {show.isBlank && <span className="jolly-badge">J</span>}
                                 <span className="letter">{show.letter}</span>
                                 <span className="pts">
@@ -1308,6 +1313,16 @@ export function App() {
 
                 {state.status === "playing" && !spectating && (
                   <>
+                    {state.mustPlayBlank && isMyTurn && (
+                      <p className="meta center help-tip">
+                        A visszacserélt jollyt ebben a körben le kell raknod.
+                      </p>
+                    )}
+                    {state.lastMove && (
+                      <p className="meta center last-move-hint">
+                        Utolsó lépés: {state.lastMove.playerName}
+                      </p>
+                    )}
                     <div className="play-dock">
                       <div className="rack">
                         {myRack.map((letter, i) => (

@@ -203,6 +203,10 @@ export function playMove(
     throw new Error("Nem a te köröd.");
   }
 
+  if (state.mustPlayBlank && !placements.some((p) => p.isBlank)) {
+    throw new Error("A visszacserélt jollyt ebben a körben le kell raknod.");
+  }
+
   const validated = validateMove(
     state.board,
     player.rack,
@@ -237,6 +241,12 @@ export function playMove(
     players,
     consecutivePasses: 0,
     moveCount: state.moveCount + 1,
+    mustPlayBlank: false,
+    lastMove: {
+      playerId: player.id,
+      playerName: player.name,
+      placements: validated.move.placements,
+    },
   };
 
   const emptied = updatedPlayer.rack.length === 0 && bag.length === 0;
@@ -267,6 +277,9 @@ export function passTurn(
   if (!player || player.id !== playerId || player.eliminated) {
     throw new Error("Nem a te köröd.");
   }
+  if (state.mustPlayBlank) {
+    throw new Error("A visszacserélt jollyt le kell raknod, passzolni nem lehet.");
+  }
 
   let next: GameState = {
     ...state,
@@ -274,7 +287,9 @@ export function passTurn(
     moveCount: state.moveCount + 1,
   };
   const activeCount = activeIndices(next).length;
-  if (next.consecutivePasses >= activeCount * rules.consecutivePassRoundsToEnd) {
+  const roundsNeeded =
+    next.bag.length === 0 ? 1 : rules.consecutivePassRoundsToEnd;
+  if (next.consecutivePasses >= activeCount * roundsNeeded) {
     const players = next.players.map((p) =>
       p.eliminated ? p : deductRack(p, blankPenalty(rules))
     );
@@ -350,6 +365,7 @@ export function swapBlank(
     board,
     players,
     moveCount: state.moveCount + 1,
+    mustPlayBlank: true,
   };
 }
 
@@ -360,6 +376,9 @@ export function exchangeTiles(
   rules: Rules = { ...DEFAULT_RULES, endMode: state.endMode }
 ): GameState {
   if (state.status !== "playing") throw new Error("Nincs aktív játszma.");
+  if (state.mustPlayBlank) {
+    throw new Error("A visszacserélt jollyt le kell raknod, cserélni nem lehet.");
+  }
   if (state.bag.length < tiles.length) throw new Error("Nincs elég betű a zsákban.");
   const idx = state.currentPlayerIndex;
   const player = state.players[idx];
@@ -413,6 +432,8 @@ export function toPublicState(
     endMode: state.endMode,
     tableId: state.tableId,
     bagCount: state.bag.length,
+    lastMove: state.lastMove ?? null,
+    mustPlayBlank: !!state.mustPlayBlank,
     players: state.players.map((p) => ({
       id: p.id,
       name: p.name,

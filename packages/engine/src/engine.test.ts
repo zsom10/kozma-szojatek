@@ -166,6 +166,7 @@ describe("scoring house rules", () => {
     assert.equal(state.board[CENTER][CENTER]?.isBlank, false);
     assert.ok(state.players[0].rack.includes("?"));
     assert.equal(state.players[0].rack.includes("A"), false);
+    assert.equal(state.mustPlayBlank, true);
   });
 
   it("rack blank penalty is 10", () => {
