@@ -8,6 +8,7 @@ import {
   timeoutPass,
   swapBlank,
   resignTurn,
+  exchangeTiles,
   toPublicState,
   chooseBotMove,
   type GameState,
@@ -16,13 +17,31 @@ import {
   type EndMode,
   type Lexicon,
 } from "@szorako/engine";
-import { recordFinishedGame, saveGameState } from "./db.js";
+import { recordFinishedGame, saveGameState, addUserWords } from "./db.js";
 
 export type TableSeat = {
   userId: string;
   name: string;
   isBot: boolean;
   botDifficulty?: BotDifficulty;
+};
+
+export type WordChallenge = {
+  id: string;
+  proposerId: string;
+  proposerName: string;
+  placements: Placement[];
+  words: string[];
+  voterIds: string[];
+  votes: Record<string, "yes" | "no">;
+};
+
+export type ChatMessage = {
+  id: string;
+  userId: string;
+  name: string;
+  text: string;
+  at: number;
 };
 
 export type TableInfo = {
@@ -34,6 +53,8 @@ export type TableInfo = {
   hostUserId: string | null;
   game: GameState | null;
   spectators: Set<string>;
+  challenge: WordChallenge | null;
+  chat: ChatMessage[];
   meta: {
     bingos: Record<string, number>;
     passes: Record<string, number>;
@@ -78,6 +99,8 @@ export function initTables(): void {
       hostUserId: null,
       game: null,
       spectators: new Set(),
+      challenge: null,
+      chat: [],
       meta: emptyMeta(),
     });
   }
@@ -270,8 +293,102 @@ export function startTable(tableId: number, hostId: string): TableInfo {
   game = startGame(game);
   t.game = game;
   t.status = "playing";
+  t.challenge = null;
+  t.chat = [];
   t.meta = emptyMeta();
   saveGameState(game, t.seats.some((s) => s.isBot) && t.seats.filter((s) => !s.isBot).length === 1);
+  return t;
+}
+
+function humanIds(game: GameState): string[] {
+  return game.players.filter((p) => !p.isBot && !p.eliminated).map((p) => p.id);
+}
+
+export function countHumans(game: GameState): number {
+  return humanIds(game).length;
+}
+
+export function proposeChallenge(
+  tableId: number,
+  userId: string,
+  placements: Placement[],
+  words: string[]
+): TableInfo {
+  const t = tables.get(tableId);
+  if (!t?.game || t.game.status !== "playing") throw new Error("Nincs meccs.");
+  if (t.challenge) throw new Error("Már van függő szavazás.");
+  const cur = t.game.players[t.game.currentPlayerIndex];
+  if (!cur || cur.id !== userId) throw new Error("Nem a te köröd.");
+  const voters = humanIds(t.game).filter((id) => id !== userId);
+  if (voters.length === 0) throw new Error("Egyedül nem kell szavazás.");
+  const clean = words
+    .map((w) => String(w).toLocaleUpperCase("hu").normalize("NFC").trim())
+    .filter(Boolean);
+  if (!clean.length) throw new Error("Nincs szavazandó szó.");
+  t.challenge = {
+    id: nanoid(8),
+    proposerId: userId,
+    proposerName: cur.name,
+    placements,
+    words: clean,
+    voterIds: voters,
+    votes: {},
+  };
+  notifyTable(t);
+  return t;
+}
+
+export function voteChallenge(
+  tableId: number,
+  userId: string,
+  accept: boolean,
+  lexicon: Lexicon
+): TableInfo {
+  const t = tables.get(tableId);
+  if (!t?.game || !t.challenge) throw new Error("Nincs szavazás.");
+  const ch = t.challenge;
+  if (!ch.voterIds.includes(userId)) throw new Error("Te nem szavazhatsz.");
+  if (ch.votes[userId]) throw new Error("Már szavaztál.");
+  ch.votes[userId] = accept ? "yes" : "no";
+  if (!accept) {
+    t.challenge = null;
+    notifyTable(t);
+    return t;
+  }
+  const allYes = ch.voterIds.every((id) => ch.votes[id] === "yes");
+  if (!allYes) {
+    notifyTable(t);
+    return t;
+  }
+  const added = addUserWords(ch.words, ch.proposerId);
+  for (const w of added) lexicon.addWord(w);
+  for (const w of ch.words) lexicon.addWord(w);
+  const placements = ch.placements;
+  t.challenge = null;
+  return applyPlace(tableId, ch.proposerId, placements, lexicon);
+}
+
+export function cancelChallenge(tableId: number, userId: string): TableInfo {
+  const t = tables.get(tableId);
+  if (!t?.challenge) throw new Error("Nincs szavazás.");
+  if (t.challenge.proposerId !== userId && t.hostUserId !== userId) {
+    throw new Error("Csak a javasló vagy a hoszt vonhatja vissza.");
+  }
+  t.challenge = null;
+  notifyTable(t);
+  return t;
+}
+
+export function addChatMessage(tableId: number, userId: string, name: string, text: string): TableInfo {
+  const t = tables.get(tableId);
+  if (!t) throw new Error("Nincs ilyen asztal.");
+  const clean = text.trim().slice(0, 240);
+  if (!clean) throw new Error("Üres üzenet.");
+  t.chat = [
+    ...t.chat.slice(-80),
+    { id: nanoid(8), userId, name, text: clean, at: Date.now() },
+  ];
+  notifyTable(t);
   return t;
 }
 
@@ -291,6 +408,7 @@ export function applyPlace(
 ): TableInfo {
   const t = tables.get(tableId);
   if (!t?.game) throw new Error("Nincs meccs.");
+  if (t.challenge) throw new Error("Előbb a szószavazásnak véget kell érnie.");
   const result = playMove(t.game, userId, placements, lexicon);
   t.game = result.state;
   if (result.move.placements.some((p) => p.isBlank)) bump(t.meta.blanks, userId);
@@ -306,9 +424,25 @@ export function applyPlace(
   return t;
 }
 
-export function applyPass(tableId: number, userId: string): TableInfo {
+export function applyPass(
+  tableId: number,
+  userId: string,
+  opts?: { exchangeAll?: boolean }
+): TableInfo {
   const t = tables.get(tableId);
   if (!t?.game) throw new Error("Nincs meccs.");
+  if (t.challenge) throw new Error("Előbb a szószavazásnak véget kell érnie.");
+  if (opts?.exchangeAll) {
+    const player = t.game.players[t.game.currentPlayerIndex];
+    if (!player || player.id !== userId) throw new Error("Nem a te köröd.");
+    if (t.game.bag.length < player.rack.length) {
+      throw new Error("Nincs elég betű a zsákban a cseréhez.");
+    }
+    bump(t.meta.passes, userId);
+    t.game = exchangeTiles(t.game, userId, [...player.rack]);
+    afterGameUpdate(t);
+    return t;
+  }
   bump(t.meta.passes, userId);
   t.game = passTurn(t.game, userId);
   afterGameUpdate(t);
@@ -318,6 +452,7 @@ export function applyPass(tableId: number, userId: string): TableInfo {
 export function applyResign(tableId: number, userId: string): TableInfo {
   const t = tables.get(tableId);
   if (!t?.game) throw new Error("Nincs meccs.");
+  if (t.challenge) throw new Error("Előbb a szószavazásnak véget kell érnie.");
   bump(t.meta.passes, userId);
   t.game = resignTurn(t.game, userId);
   afterGameUpdate(t);
@@ -332,6 +467,7 @@ export function applySwap(
 ): TableInfo {
   const t = tables.get(tableId);
   if (!t?.game) throw new Error("Nincs meccs.");
+  if (t.challenge) throw new Error("Előbb a szószavazásnak véget kell érnie.");
   t.game = swapBlank(t.game, userId, row, col);
   afterGameUpdate(t);
   return t;
@@ -428,6 +564,9 @@ export function publicTableState(t: TableInfo, viewerId?: string, spectate = fal
       hostUserId: t.hostUserId,
       seats: t.seats,
       spectatorCount: t.spectators.size,
+      challenge: t.challenge,
+      chat: t.chat,
+      humanCount: t.game ? countHumans(t.game) : t.seats.filter((s) => !s.isBot).length,
     },
     game: t.game ? toPublicState(t.game, viewerId, spectate) : null,
   };

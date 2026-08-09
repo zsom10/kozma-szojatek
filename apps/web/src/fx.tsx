@@ -2,24 +2,30 @@ import { useEffect, useRef, useState } from "react";
 
 type TurnBannerProps = {
   show: boolean;
+  epoch: string;
   name?: string;
 };
 
-export function TurnBanner({ show, name }: TurnBannerProps) {
+export function TurnBanner({ show, epoch, name }: TurnBannerProps) {
   const [visible, setVisible] = useState(false);
   const [key, setKey] = useState(0);
-  const prev = useRef(false);
+  const prevShow = useRef(false);
+  const prevEpoch = useRef("");
 
   useEffect(() => {
-    if (show && !prev.current) {
-      setKey((k) => k + 1);
-      setVisible(true);
-      const hide = window.setTimeout(() => setVisible(false), 2400);
-      prev.current = show;
-      return () => window.clearTimeout(hide);
+    const rising = show && (!prevShow.current || (epoch && epoch !== prevEpoch.current));
+    prevShow.current = show;
+    if (epoch) prevEpoch.current = epoch;
+    if (!show) {
+      setVisible(false);
+      return;
     }
-    prev.current = show;
-  }, [show]);
+    if (!rising) return;
+    setKey((k) => k + 1);
+    setVisible(true);
+    const hide = window.setTimeout(() => setVisible(false), 2200);
+    return () => window.clearTimeout(hide);
+  }, [show, epoch]);
 
   if (!visible) return null;
 

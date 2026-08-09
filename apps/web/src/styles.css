@@ -213,6 +213,52 @@ button:disabled {
   border-radius: 10px;
 }
 
+.invite-banner {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.7rem;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(31, 92, 69, 0.12);
+  border: 1px solid rgba(31, 92, 69, 0.3);
+  border-radius: 12px;
+  padding: 0.75rem 0.9rem;
+}
+
+.chat-panel {
+  display: grid;
+  gap: 0.45rem;
+}
+
+.chat-log {
+  max-height: 160px;
+  overflow: auto;
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+}
+
+.chat-line {
+  line-height: 1.35;
+}
+
+.chat-compose {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.chat-compose input {
+  flex: 1;
+  border: 1.5px solid var(--line);
+  border-radius: 999px;
+  padding: 0.5rem 0.8rem;
+  background: #fffaf3;
+}
+
+.vote-box {
+  background: rgba(31, 92, 69, 0.1);
+}
+
 .waiting-room {
   display: grid;
   gap: 0.65rem;

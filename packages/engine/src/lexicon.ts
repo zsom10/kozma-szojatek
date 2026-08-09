@@ -6,6 +6,75 @@ import { tokenizeWord, tilesToWord } from "./tokenize.js";
 import { Trie, buildTrieFromWords } from "./trie.js";
 import { STARTER_WORDS } from "./dictionary.js";
 
+const INFLECTION_SUFFIXES = [
+  "KÉNT",
+  "KÉPP",
+  "VALÓ",
+  "VELŐ",
+  "JAIÉ",
+  "JEIÉ",
+  "NAK",
+  "NEK",
+  "BAN",
+  "BEN",
+  "BA",
+  "BE",
+  "RA",
+  "RE",
+  "HOZ",
+  "HEZ",
+  "HÖZ",
+  "NÁL",
+  "NÉL",
+  "TÓL",
+  "TŐL",
+  "RÓL",
+  "RŐL",
+  "VAL",
+  "VEL",
+  "ÉRT",
+  "IG",
+  "UL",
+  "ÜL",
+  "VÁ",
+  "VÉ",
+  "OK",
+  "EK",
+  "ÖK",
+  "AK",
+  "OT",
+  "ET",
+  "ÖT",
+  "AT",
+  "JAI",
+  "JEI",
+  "JA",
+  "JE",
+  "OM",
+  "EM",
+  "ÖM",
+  "AM",
+  "OD",
+  "ED",
+  "ÖD",
+  "AD",
+  "UNK",
+  "ÜNK",
+  "TOK",
+  "TEK",
+  "TÖK",
+  "IK",
+  "NI",
+  "VA",
+  "VE",
+  "TT",
+  "T",
+  "K",
+  "I",
+  "É",
+  "Á",
+].sort((a, b) => b.length - a.length);
+
 function dataPath(name: string): string {
   const here = dirname(fileURLToPath(import.meta.url));
   return join(here, "../data", name);
@@ -101,7 +170,19 @@ export class Lexicon {
   }
 
   hasTiles(tiles: string[]): boolean {
-    return this.hasWord(tilesToWord(tiles));
+    return this.hasPlayableWord(tilesToWord(tiles));
+  }
+
+  hasPlayableWord(word: string): boolean {
+    const key = word.toLocaleUpperCase("hu").normalize("NFC");
+    if (this.hasWord(key)) return true;
+    for (const suf of INFLECTION_SUFFIXES) {
+      if (key.length <= suf.length + 2) continue;
+      if (!key.endsWith(suf)) continue;
+      const stem = key.slice(0, -suf.length);
+      if (this.hasStem(stem) || this.hasWord(stem)) return true;
+    }
+    return false;
   }
 
   hasPrefix(tiles: string[]): boolean {

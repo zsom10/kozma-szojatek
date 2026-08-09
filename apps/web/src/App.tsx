@@ -17,7 +17,7 @@ import {
 } from "./gameUi";
 import { ConfettiBurst, TurnBanner } from "./fx";
 
-type Screen = "auth" | "lobby" | "table" | "account" | "leaderboard" | "settings";
+type Screen = "auth" | "lobby" | "table" | "account" | "leaderboard" | "settings" | "people";
 type UiScale = "normal" | "large" | "xlarge" | "xxlarge";
 const BOARD_SCALE_KEY = "kozma.boardScale";
 const SCALE_STEPS: { id: UiScale; label: string }[] = [
@@ -28,6 +28,38 @@ const SCALE_STEPS: { id: UiScale; label: string }[] = [
 ];
 
 type AuthUser = { id: string; name: string; uiScale: UiScale };
+
+type WordChallenge = {
+  id: string;
+  proposerId: string;
+  proposerName: string;
+  placements: { row: number; col: number; letter: string; isBlank: boolean }[];
+  words: string[];
+  voterIds: string[];
+  votes: Record<string, "yes" | "no">;
+};
+
+type ChatMessage = {
+  id: string;
+  userId: string;
+  name: string;
+  text: string;
+  at: number;
+};
+
+type PresencePerson = {
+  userId: string;
+  name: string;
+  available: boolean;
+  tableId: number | null;
+};
+
+type InviteInfo = {
+  fromId: string;
+  fromName: string;
+  tableId: number;
+  at: number;
+};
 
 type TableSummary = {
   id: number;
@@ -124,6 +156,9 @@ export function App() {
     hostUserId: string | null;
     seats: TableSeat[];
     spectatorCount: number;
+    challenge?: WordChallenge | null;
+    chat?: ChatMessage[];
+    humanCount?: number;
   } | null>(null);
   const [state, setState] = useState<PublicGameState | null>(null);
   const [spectating, setSpectating] = useState(false);
@@ -156,8 +191,22 @@ export function App() {
   const [swapMode, setSwapMode] = useState(false);
   const [busy, setBusy] = useState("");
   const [activeTableId, setActiveTableId] = useState<number | null>(null);
+  const [people, setPeople] = useState<PresencePerson[]>([]);
+  const [invite, setInvite] = useState<InviteInfo | null>(null);
+  const [chatText, setChatText] = useState("");
+  const [iAmAvailable, setIAmAvailable] = useState(true);
   const boardRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+
+  function applyIncomingGame(
+    prev: PublicGameState | null,
+    next: PublicGameState | null
+  ): PublicGameState | null {
+    if (!next) return null;
+    if (prev && next.moveCount < prev.moveCount) return prev;
+    if (prev && next.moveCount === prev.moveCount) return prev;
+    return next;
+  }
 
   const token = auth?.token;
   const user = auth?.user;
@@ -278,6 +327,14 @@ export function App() {
         setTables(msg.tables ?? []);
         return;
       }
+      if (msg.type === "presence") {
+        setPeople(Array.isArray(msg.people) ? msg.people : []);
+        return;
+      }
+      if (msg.type === "invite") {
+        setInvite(msg.invite ?? null);
+        return;
+      }
       if (msg.type === "state") {
         if (msg.table) {
           setTableMeta(msg.table);
@@ -285,15 +342,16 @@ export function App() {
         }
         const next = msg.game ?? null;
         setState((prev) => {
-          if (prev && next && prev.moveCount === next.moveCount) return prev;
-          if (!prev || !next || prev.moveCount !== next.moveCount) {
+          const applied = applyIncomingGame(prev, next);
+          if (applied && prev && applied.moveCount !== prev.moveCount) {
             queueMicrotask(() => {
               setDrafts([]);
               setSelectedRack(null);
               setInvalidWords([]);
+              setSwapMode(false);
             });
           }
-          return next;
+          return applied;
         });
         setError("");
         if (msg.game?.status === "finished") {
@@ -329,12 +387,15 @@ export function App() {
         if (dead || !data.game) return;
         setTableMeta(data.table);
         setState((prev: PublicGameState | null) => {
-          if (prev && prev.moveCount === data.game.moveCount) return prev;
-          queueMicrotask(() => {
-            setDrafts([]);
-            setSelectedRack(null);
-          });
-          return data.game;
+          const applied = applyIncomingGame(prev, data.game);
+          if (applied && prev && applied.moveCount !== prev.moveCount) {
+            queueMicrotask(() => {
+              setDrafts([]);
+              setSelectedRack(null);
+              setSwapMode(false);
+            });
+          }
+          return applied;
         });
       } catch {
         /* ignore */
@@ -504,9 +565,25 @@ export function App() {
   }
 
   async function submitPass() {
-    if (!tableMeta) return;
+    if (!tableMeta || !state) return;
+    const mePlayer = state.players.find((p) => p.id === user?.id);
+    const canExchange =
+      !!mePlayer && state.bagCount >= (mePlayer.rackCount || myRack.length);
+    let exchangeAll = false;
+    if (canExchange) {
+      exchangeAll = confirm(
+        "Passzolsz.\n\nKicseréljem az összes betűdet a zsákból? (OK = csere, Mégse = csak passz)"
+      );
+    } else if (
+      !confirm("Passzolsz? (A zsákban nincs elég betű a teljes cseréhez.)")
+    ) {
+      return;
+    }
     try {
-      const data = await api(`/api/tables/${tableMeta.id}/pass`, { method: "POST" });
+      const data = await api(`/api/tables/${tableMeta.id}/pass`, {
+        method: "POST",
+        body: JSON.stringify({ exchangeAll }),
+      });
       applyTablePayload(data, false);
       wsAttach("resume", tableMeta.id);
     } catch (e) {
@@ -620,17 +697,24 @@ export function App() {
   }
 
   function onCellClick(row: number, col: number) {
-    if (!isMyTurn || !state) return;
+    if (!isMyTurn || !state || !tableMeta) return;
     if (swapMode) {
       const cell = state.board[row][col];
       if (cell?.isBlank) {
-        send({
-          type: "swapBlank",
-          tableId: tableMeta?.id,
-          row,
-          col,
-        });
-        setSwapMode(false);
+        void (async () => {
+          try {
+            const data = await api(`/api/tables/${tableMeta.id}/swap-blank`, {
+              method: "POST",
+              body: JSON.stringify({ row, col }),
+            });
+            applyTablePayload(data, false);
+            wsAttach("resume", tableMeta.id);
+            setSwapMode(false);
+            setError("");
+          } catch (e) {
+            setError((e as Error).message);
+          }
+        })();
       }
       return;
     }
@@ -673,12 +757,55 @@ export function App() {
   }, [screen, isMyTurn, myRack.length, drafts, tableMeta?.id]);
 
   async function acceptWords() {
+    if (!tableMeta) return;
+    const humans = tableMeta.humanCount ?? 1;
     try {
-      await api("/api/words", {
+      if (humans <= 1) {
+        await api("/api/words", {
+          method: "POST",
+          body: JSON.stringify({ words: invalidWords, tableId: tableMeta.id }),
+        });
+        await submitPlace();
+        return;
+      }
+      const data = await api(`/api/tables/${tableMeta.id}/challenge`, {
         method: "POST",
-        body: JSON.stringify({ words: invalidWords }),
+        body: JSON.stringify({
+          placements: draftsToPlacements(drafts),
+          words: invalidWords,
+        }),
       });
-      await submitPlace();
+      applyTablePayload(data, false);
+      setInvalidWords([]);
+      setError("Szavazásra küldve — a többieknek el kell fogadniuk.");
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function voteWord(accept: boolean) {
+    if (!tableMeta) return;
+    try {
+      const data = await api(`/api/tables/${tableMeta.id}/challenge/vote`, {
+        method: "POST",
+        body: JSON.stringify({ accept }),
+      });
+      applyTablePayload(data, spectating);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+
+  async function sendChat() {
+    if (!tableMeta || !chatText.trim()) return;
+    const text = chatText.trim();
+    setChatText("");
+    try {
+      const data = await api(`/api/tables/${tableMeta.id}/chat`, {
+        method: "POST",
+        body: JSON.stringify({ text }),
+      });
+      applyTablePayload(data, spectating);
     } catch (e) {
       setError((e as Error).message);
     }
@@ -742,6 +869,9 @@ export function App() {
           <button className="secondary" type="button" onClick={() => setScreen("lobby")}>
             Asztalok
           </button>
+          <button className="secondary" type="button" onClick={() => setScreen("people")}>
+            Elérhető{invite ? " !" : ""}
+          </button>
           <button className="secondary nav-extra" type="button" onClick={() => setScreen("account")}>
             Fiókom
           </button>
@@ -761,6 +891,88 @@ export function App() {
         <div className="error-banner" role="alert">
           {error}
         </div>
+      )}
+
+      {invite && (
+        <div className="invite-banner" role="status">
+          <span>
+            <strong>{invite.fromName}</strong> meghívott az {invite.tableId}. asztalra.
+          </span>
+          <div className="actions">
+            <button
+              type="button"
+              onClick={() => {
+                void joinTableClick(invite.tableId);
+                setInvite(null);
+                send({ type: "inviteDismiss" });
+              }}
+            >
+              Csatlakozom
+            </button>
+            <button
+              className="secondary"
+              type="button"
+              onClick={() => {
+                setInvite(null);
+                send({ type: "inviteDismiss" });
+              }}
+            >
+              Később
+            </button>
+          </div>
+        </div>
+      )}
+
+      {screen === "people" && (
+        <section className="panel">
+          <h2 className="panel-title">Ki elérhető?</h2>
+          <div className="actions" style={{ marginBottom: "0.8rem" }}>
+            <button
+              type="button"
+              className={iAmAvailable ? "" : "secondary"}
+              onClick={() => {
+                const next = !iAmAvailable;
+                setIAmAvailable(next);
+                send({ type: "setAvailable", available: next });
+              }}
+            >
+              {iAmAvailable ? "Elérhető vagyok" : "Nem vagyok elérhető"}
+            </button>
+          </div>
+          <div className="player-list">
+            {people.filter((p) => p.userId !== user?.id).length === 0 && (
+              <p className="meta">Most senki más nincs online.</p>
+            )}
+            {people
+              .filter((p) => p.userId !== user?.id)
+              .map((p) => (
+                <div className="player-row" key={p.userId}>
+                  <span>
+                    {p.name}
+                    {p.available ? " · elérhető" : p.tableId ? ` · asztal ${p.tableId}` : " · elfoglalt"}
+                  </span>
+                  {p.available && tableMeta && tableMeta.status !== "playing" && (
+                    <button
+                      type="button"
+                      className="secondary"
+                      onClick={() =>
+                        send({
+                          type: "invite",
+                          toUserId: p.userId,
+                          tableId: tableMeta.id,
+                        })
+                      }
+                    >
+                      Meghívás
+                    </button>
+                  )}
+                  {p.available && !tableMeta && (
+                    <span className="meta">Ülj be egy asztalra a meghíváshoz</span>
+                  )}
+                </div>
+              ))}
+          </div>
+        </section>
       )}
 
       {screen === "lobby" && (
@@ -1198,8 +1410,37 @@ export function App() {
                           A szótár nem ismeri: <strong>{invalidWords.join(", ")}</strong>
                         </p>
                         <button type="button" onClick={acceptWords}>
-                          Ez értelmes — felveszem
+                          {(tableMeta.humanCount ?? 1) <= 1
+                            ? "Ez értelmes — felveszem"
+                            : "Szavazásra küldöm"}
                         </button>
+                      </div>
+                    )}
+                    {tableMeta.challenge && (
+                      <div className="accept-box vote-box">
+                        <p>
+                          <strong>{tableMeta.challenge.proposerName}</strong> szavakat javasol:{" "}
+                          <strong>{tableMeta.challenge.words.join(", ")}</strong>
+                        </p>
+                        {tableMeta.challenge.proposerId === user?.id ? (
+                          <p className="meta">Várjuk a többiek szavazatát…</p>
+                        ) : tableMeta.challenge.voterIds.includes(user?.id ?? "") &&
+                          !tableMeta.challenge.votes[user?.id ?? ""] ? (
+                          <div className="actions">
+                            <button type="button" onClick={() => void voteWord(true)}>
+                              Elfogadom
+                            </button>
+                            <button
+                              className="secondary"
+                              type="button"
+                              onClick={() => void voteWord(false)}
+                            >
+                              Elutasítom
+                            </button>
+                          </div>
+                        ) : (
+                          <p className="meta">Szavazat rögzítve / várakozás</p>
+                        )}
                       </div>
                     )}
                   </>
@@ -1292,11 +1533,48 @@ export function App() {
                 ))}
               </div>
             </section>
+            <section className="panel chat-panel">
+              <div className="panel-title" style={{ fontSize: "1rem", marginBottom: "0.4rem" }}>
+                Chat
+              </div>
+              <div className="chat-log">
+                {(tableMeta.chat ?? []).length === 0 && (
+                  <p className="meta">Még nincs üzenet.</p>
+                )}
+                {(tableMeta.chat ?? []).map((m) => (
+                  <div key={m.id} className="chat-line">
+                    <strong>{m.name}:</strong> {m.text}
+                  </div>
+                ))}
+              </div>
+              <div className="chat-compose">
+                <input
+                  value={chatText}
+                  onChange={(e) => setChatText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void sendChat();
+                  }}
+                  placeholder="Üzenet…"
+                  maxLength={240}
+                />
+                <button type="button" onClick={() => void sendChat()}>
+                  Küld
+                </button>
+              </div>
+            </section>
           </aside>
         </div>
       )}
 
-      <TurnBanner show={isMyTurn} name={user?.name} />
+      <TurnBanner
+        show={isMyTurn}
+        epoch={
+          state
+            ? `${state.moveCount}:${state.currentPlayerIndex}:${user?.id ?? ""}`
+            : ""
+        }
+        name={user?.name}
+      />
       <ConfettiBurst
         active={!!state && state.status === "finished" && screen === "table"}
         celebrate={iWon}

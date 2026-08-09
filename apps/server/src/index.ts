@@ -41,6 +41,11 @@ import {
   applyPass,
   applyResign,
   applySwap,
+  proposeChallenge,
+  voteChallenge,
+  cancelChallenge,
+  addChatMessage,
+  countHumans,
   tickTimeouts,
   maybeBot,
   publicTableState,
@@ -60,9 +65,51 @@ type Client = {
   name: string;
   tableId: number | null;
   spectating: boolean;
+  available: boolean;
 };
 
 const clients = new Map<WebSocket, Client>();
+
+type Invite = {
+  fromId: string;
+  fromName: string;
+  tableId: number;
+  at: number;
+};
+
+const invites = new Map<string, Invite>();
+
+function broadcastPresence(): void {
+  const online = [...clients.values()]
+    .filter((c) => c.ws.readyState === WebSocket.OPEN)
+    .reduce<
+      { userId: string; name: string; available: boolean; tableId: number | null }[]
+    >((acc, c) => {
+      if (acc.some((x) => x.userId === c.userId)) return acc;
+      acc.push({
+        userId: c.userId,
+        name: c.name,
+        available: c.available && c.tableId == null,
+        tableId: c.tableId,
+      });
+      return acc;
+    }, []);
+  const payload = JSON.stringify({ type: "presence", people: online });
+  for (const [ws, client] of clients) {
+    if (ws.readyState !== WebSocket.OPEN) continue;
+    if (client.tableId != null) continue;
+    ws.send(payload);
+  }
+}
+
+function sendToUser(userId: string, msg: unknown): void {
+  const raw = JSON.stringify(msg);
+  for (const [ws, client] of clients) {
+    if (client.userId === userId && ws.readyState === WebSocket.OPEN) {
+      ws.send(raw);
+    }
+  }
+}
 
 function tokenFromReq(req: express.Request): string | null {
   const h = req.headers.authorization;
@@ -219,9 +266,95 @@ app.post("/api/tables/:id/pass", (req, res) => {
   try {
     const user = requireUser(req);
     const id = Number(req.params.id);
-    const t = applyPass(id, user.id);
+    const exchangeAll = !!req.body?.exchangeAll;
+    const t = applyPass(id, user.id, { exchangeAll });
     maybeBot(t, lexicon);
     res.json(publicTableState(t, user.id));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/tables/:id/swap-blank", (req, res) => {
+  try {
+    const user = requireUser(req);
+    const id = Number(req.params.id);
+    const row = Number(req.body?.row);
+    const col = Number(req.body?.col);
+    const t = applySwap(id, user.id, row, col);
+    maybeBot(t, lexicon);
+    res.json(publicTableState(t, user.id));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/tables/:id/challenge", (req, res) => {
+  try {
+    const user = requireUser(req);
+    const id = Number(req.params.id);
+    const placements = req.body?.placements as Placement[];
+    const words = Array.isArray(req.body?.words) ? req.body.words.map(String) : [];
+    const t = proposeChallenge(id, user.id, placements, words);
+    broadcastTable(id);
+    res.json(publicTableState(t, user.id));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/tables/:id/challenge/vote", (req, res) => {
+  try {
+    const user = requireUser(req);
+    const id = Number(req.params.id);
+    const accept = !!req.body?.accept;
+    const t = voteChallenge(id, user.id, accept, lexicon);
+    broadcastTable(id);
+    maybeBot(t, lexicon);
+    res.json(publicTableState(t, user.id));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/tables/:id/challenge/cancel", (req, res) => {
+  try {
+    const user = requireUser(req);
+    const id = Number(req.params.id);
+    const t = cancelChallenge(id, user.id);
+    broadcastTable(id);
+    res.json(publicTableState(t, user.id));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/tables/:id/chat", (req, res) => {
+  try {
+    const user = requireUser(req);
+    const id = Number(req.params.id);
+    const t = addChatMessage(id, user.id, user.name, String(req.body?.text ?? ""));
+    broadcastTable(id);
+    res.json(publicTableState(t, user.id));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/words", (req, res) => {
+  try {
+    const user = requireUser(req);
+    const words = Array.isArray(req.body?.words) ? req.body.words.map(String) : [];
+    const tableId = req.body?.tableId != null ? Number(req.body.tableId) : null;
+    if (tableId) {
+      const t = getTable(tableId);
+      if (t?.game && countHumans(t.game) > 1) {
+        throw new Error("Több játékosnál a többieknek el kell fogadniuk a szót.");
+      }
+    }
+    const added = addUserWords(words, user.id);
+    for (const w of added) lexicon.addWord(w);
+    res.json({ added });
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
@@ -315,18 +448,6 @@ app.get("/api/leaderboard", (_req, res) => {
   res.json(getLeaderboard());
 });
 
-app.post("/api/words", (req, res) => {
-  try {
-    const user = requireUser(req);
-    const words = Array.isArray(req.body?.words) ? req.body.words.map(String) : [];
-    const added = addUserWords(words, user.id);
-    for (const w of added) lexicon.addWord(w);
-    res.json({ added });
-  } catch (e) {
-    res.status(400).json({ error: (e as Error).message });
-  }
-});
-
 const webDist = path.resolve(__dirname, "../../web/dist");
 app.use(express.static(webDist));
 app.get("*", (req, res, next) => {
@@ -353,10 +474,25 @@ wss.on("connection", (ws, req) => {
     name: user.name,
     tableId: null,
     spectating: false,
+    available: true,
   };
   clients.set(ws, client);
 
   ws.send(JSON.stringify({ type: "hello", user: { id: user.id, name: user.name }, version: APP_VERSION }));
+  broadcastPresence();
+  const inv = invites.get(user.id);
+  if (inv) {
+    ws.send(JSON.stringify({ type: "invite", invite: inv }));
+  }
+
+  ws.on("close", () => {
+    if (client.tableId != null) {
+      const t = getTable(client.tableId);
+      t?.spectators.delete(client.userId);
+    }
+    clients.delete(ws);
+    broadcastPresence();
+  });
 
   ws.on("message", (raw) => {
     let msg: Record<string, unknown>;
@@ -378,14 +514,6 @@ wss.on("connection", (ws, req) => {
       );
     }
   });
-
-  ws.on("close", () => {
-    if (client.tableId != null) {
-      const t = getTable(client.tableId);
-      t?.spectators.delete(client.userId);
-    }
-    clients.delete(ws);
-  });
 });
 
 function handleWs(client: Client, msg: Record<string, unknown>): void {
@@ -405,6 +533,7 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
     client.tableId = id;
     client.spectating = false;
     broadcastTable(id);
+    broadcastPresence();
     client.ws.send(JSON.stringify({ type: "state", ...publicTableState(t, client.userId) }));
     return;
   }
@@ -413,6 +542,7 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
     const t = resumeTable(id, client.userId);
     client.tableId = id;
     client.spectating = false;
+    broadcastPresence();
     client.ws.send(JSON.stringify({ type: "state", ...publicTableState(t, client.userId) }));
     return;
   }
@@ -421,6 +551,7 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
     const t = spectateTable(id, client.userId);
     client.tableId = id;
     client.spectating = true;
+    broadcastPresence();
     client.ws.send(
       JSON.stringify({ type: "state", ...publicTableState(t, client.userId, true) })
     );
@@ -433,6 +564,7 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
       client.tableId = null;
       client.spectating = false;
     }
+    broadcastPresence();
     client.ws.send(JSON.stringify({ type: "tables", tables: listTables() }));
     return;
   }
@@ -483,7 +615,7 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
   if (type === "pass") {
     if (client.spectating) throw new Error("Nézőként nem léphetsz.");
     const id = Number(msg.tableId ?? client.tableId);
-    const t = applyPass(id, client.userId);
+    const t = applyPass(id, client.userId, { exchangeAll: !!msg.exchangeAll });
     broadcastTable(id);
     maybeBot(t, lexicon);
     return;
@@ -502,6 +634,41 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
     const t = applySwap(id, client.userId, Number(msg.row), Number(msg.col));
     broadcastTable(id);
     maybeBot(t, lexicon);
+    return;
+  }
+  if (type === "chat") {
+    const id = Number(msg.tableId ?? client.tableId);
+    addChatMessage(id, client.userId, client.name, String(msg.text ?? ""));
+    broadcastTable(id);
+    return;
+  }
+  if (type === "setAvailable") {
+    client.available = !!msg.available;
+    broadcastPresence();
+    return;
+  }
+  if (type === "invite") {
+    const toUserId = String(msg.toUserId ?? "");
+    const tableId = Number(msg.tableId);
+    if (!toUserId || !tableId) throw new Error("Hiányzó meghívó adat.");
+    const t = getTable(tableId);
+    if (!t) throw new Error("Nincs ilyen asztal.");
+    if (t.hostUserId !== client.userId && !t.seats.some((s) => s.userId === client.userId)) {
+      throw new Error("Csak asztalnál ülő hívhat.");
+    }
+    if (t.status === "playing") throw new Error("Már zajlik a meccs.");
+    const invite = {
+      fromId: client.userId,
+      fromName: client.name,
+      tableId,
+      at: Date.now(),
+    };
+    invites.set(toUserId, invite);
+    sendToUser(toUserId, { type: "invite", invite });
+    return;
+  }
+  if (type === "inviteDismiss") {
+    invites.delete(client.userId);
     return;
   }
 }
