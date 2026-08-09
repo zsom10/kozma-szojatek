@@ -2,10 +2,9 @@
 
 Magyar szókirakós családi használatra — fiókokkal, 5 asztallal, nézőmóddal és gazdag statisztikákkal.
 
-## Indítás
+## Indítás (helyben)
 
 ```bash
-cd szorako
 npm install
 npm run build:engine
 npm run dev
@@ -21,7 +20,14 @@ npm run build
 npm start
 ```
 
-Adatbázis: SQLite a `DATA_DIR` alatt (`kozma.db`). Railway-n mountold a Volume-ot `/data`-ra, és állítsd `DATA_DIR=/data`.
+## Deploy (Railway)
+
+1. Kösd a GitHub repót a Railway-hez (New Project → Deploy from GitHub).
+2. Volume: mount path `/data`.
+3. Variables: `DATA_DIR=/data` (a Dockerfileban is ez az alap).
+4. Deploy után a publikus URL-en web + API + WebSocket együtt fut.
+
+Adatbázis: SQLite a `DATA_DIR` alatt (`kozma.db`).
 
 ## Főbb funkciók
 
@@ -31,6 +37,7 @@ Adatbázis: SQLite a `DATA_DIR` alatt (`kozma.db`). Railway-n mountold a Volume-
 - Fiókom: 25+ stat + meccstörténet
 - Ranglista: legjobb pont / PvP / AI
 - UI méret, billentyű 1–7, mobil húzás
+- Botok random magyar névvel; te jössz / végjáték animáció
 
 ## Szabályok és verzió
 
