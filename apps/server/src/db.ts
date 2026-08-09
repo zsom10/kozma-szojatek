@@ -457,3 +457,91 @@ export function appVersion(): string {
     .get() as { value: string } | undefined;
   return row?.value ?? APP_VERSION;
 }
+
+export function isAdminName(name: string): boolean {
+  const raw = process.env.ADMIN_NAMES ?? "zsom10";
+  const allowed = raw
+    .split(",")
+    .map((s) => s.trim().toLocaleLowerCase("hu"))
+    .filter(Boolean);
+  return allowed.includes(name.trim().toLocaleLowerCase("hu"));
+}
+
+export function getAdminStats() {
+  const database = getDb();
+  const count = (sql: string) =>
+    Number((database.prepare(sql).get() as { n: number }).n ?? 0);
+
+  const overview = {
+    users: count("SELECT COUNT(*) AS n FROM users"),
+    games: count("SELECT COUNT(*) AS n FROM games"),
+    finishedGames: count("SELECT COUNT(*) AS n FROM games WHERE status = 'finished'"),
+    playingGames: count("SELECT COUNT(*) AS n FROM games WHERE status = 'playing'"),
+    userWords: count("SELECT COUNT(*) AS n FROM user_words"),
+    sessions: count("SELECT COUNT(*) AS n FROM sessions"),
+    pvpGames: count("SELECT COUNT(*) AS n FROM games WHERE vs_ai = 0"),
+    aiGames: count("SELECT COUNT(*) AS n FROM games WHERE vs_ai = 1"),
+  };
+
+  const users = database
+    .prepare(
+      `SELECT u.id, u.name,
+              datetime(u.created_at/1000, 'unixepoch', 'localtime') AS created,
+              datetime(u.last_seen_at/1000, 'unixepoch', 'localtime') AS last_seen,
+              COALESCE(s.games, 0) AS games,
+              COALESCE(s.wins, 0) AS wins,
+              COALESCE(s.best_score, 0) AS best_score,
+              COALESCE(s.words_added, 0) AS words_added
+       FROM users u
+       LEFT JOIN user_stats s ON s.user_id = u.id
+       ORDER BY u.last_seen_at DESC`
+    )
+    .all();
+
+  const recentGames = database
+    .prepare(
+      `SELECT g.id, g.status, g.end_mode, g.vs_ai,
+              datetime(g.created_at/1000, 'unixepoch', 'localtime') AS created,
+              datetime(g.finished_at/1000, 'unixepoch', 'localtime') AS finished,
+              (SELECT group_concat(gp.name || ' (' || gp.score || ')', ' · ')
+               FROM game_players gp WHERE gp.game_id = g.id) AS players
+       FROM games g
+       ORDER BY g.created_at DESC
+       LIMIT 25`
+    )
+    .all();
+
+  const words = database
+    .prepare(
+      `SELECT w.word,
+              COALESCE(u.name, '—') AS added_by,
+              datetime(w.created_at/1000, 'unixepoch', 'localtime') AS created
+       FROM user_words w
+       LEFT JOIN users u ON u.id = w.added_by
+       ORDER BY w.created_at DESC
+       LIMIT 80`
+    )
+    .all();
+
+  const topPlayers = database
+    .prepare(
+      `SELECT u.name, s.games, s.wins, s.best_score, s.pvp_wins, s.ai_wins, s.total_score
+       FROM user_stats s JOIN users u ON u.id = s.user_id
+       WHERE s.games > 0
+       ORDER BY s.wins DESC, s.best_score DESC
+       LIMIT 15`
+    )
+    .all();
+
+  const wordsByUser = database
+    .prepare(
+      `SELECT COALESCE(u.name, 'ismeretlen') AS name, COUNT(*) AS n
+       FROM user_words w
+       LEFT JOIN users u ON u.id = w.added_by
+       GROUP BY COALESCE(u.name, 'ismeretlen')
+       ORDER BY n DESC`
+    )
+    .all();
+
+  return { overview, users, recentGames, words, topPlayers, wordsByUser };
+}

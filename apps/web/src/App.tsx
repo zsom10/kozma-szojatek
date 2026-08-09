@@ -17,7 +17,7 @@ import {
 } from "./gameUi";
 import { ConfettiBurst, TurnBanner } from "./fx";
 
-type Screen = "auth" | "lobby" | "table" | "account" | "leaderboard" | "settings" | "people";
+type Screen = "auth" | "lobby" | "table" | "account" | "leaderboard" | "settings" | "people" | "admin";
 type UiScale = "normal" | "large" | "xlarge" | "xxlarge";
 const BOARD_SCALE_KEY = "kozma.boardScale";
 const SCALE_STEPS: { id: UiScale; label: string }[] = [
@@ -186,6 +186,15 @@ export function App() {
   const [profile, setProfile] = useState<{
     curiosities: Curiosity[];
     history: HistoryRow[];
+    isAdmin?: boolean;
+  } | null>(null);
+  const [adminStats, setAdminStats] = useState<{
+    overview: Record<string, number>;
+    users: Record<string, unknown>[];
+    recentGames: Record<string, unknown>[];
+    words: Record<string, unknown>[];
+    topPlayers: Record<string, unknown>[];
+    wordsByUser: Record<string, unknown>[];
   } | null>(null);
   const [dragRack, setDragRack] = useState<number | null>(null);
   const [swapMode, setSwapMode] = useState(false);
@@ -267,10 +276,24 @@ export function App() {
     if (!token) return;
     try {
       const data = await api("/api/me");
-      setProfile({ curiosities: data.curiosities ?? [], history: data.history ?? [] });
+      setProfile({
+        curiosities: data.curiosities ?? [],
+        history: data.history ?? [],
+        isAdmin: !!data.isAdmin,
+      });
       if (data.user?.uiScale) setUiScale(data.user.uiScale);
     } catch {
       /* ignore */
+    }
+  }, [api, token]);
+
+  const refreshAdmin = useCallback(async () => {
+    if (!token) return;
+    try {
+      const data = await api("/api/admin/stats");
+      setAdminStats(data);
+    } catch (e) {
+      setError((e as Error).message);
     }
   }, [api, token]);
 
@@ -293,6 +316,15 @@ export function App() {
       setVersion(data.version ?? "1.0.0");
       setScreen("lobby");
       setPassInput("");
+      queueMicrotask(() => {
+        void api("/api/me").then((me) => {
+          setProfile({
+            curiosities: me.curiosities ?? [],
+            history: me.history ?? [],
+            isAdmin: !!me.isAdmin,
+          });
+        }).catch(() => undefined);
+      });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -375,7 +407,11 @@ export function App() {
     if (screen === "lobby") refreshTables();
     if (screen === "leaderboard") refreshLeaderboard();
     if (screen === "account") refreshProfile();
-  }, [screen, refreshTables, refreshLeaderboard, refreshProfile]);
+    if (screen === "admin") {
+      void refreshProfile();
+      void refreshAdmin();
+    }
+  }, [screen, refreshTables, refreshLeaderboard, refreshProfile, refreshAdmin]);
 
   useEffect(() => {
     if (screen !== "table" || activeTableId == null) return;
@@ -881,6 +917,11 @@ export function App() {
           <button className="secondary nav-extra" type="button" onClick={() => setScreen("settings")}>
             Beállítások
           </button>
+          {profile?.isAdmin && (
+            <button className="secondary" type="button" onClick={() => setScreen("admin")}>
+              Admin
+            </button>
+          )}
           <button className="secondary" type="button" onClick={logout}>
             Kilépés
           </button>
@@ -1064,14 +1105,187 @@ export function App() {
               {profile.history.map((h) => (
                 <div className="player-row" key={`${h.id}-${h.finished_at}`}>
                   <span>
-                    {h.won ? "Győzelem" : "Vereség"} · {h.vs_ai ? "AI" : "PvP"} ·{" "}
-                    {h.opponents || "—"}
+                    {h.won ? "Győzelem" : "Vereség"} · {h.score} pont
+                    {h.opponents ? ` · vs ${h.opponents}` : ""}
                   </span>
-                  <strong>{h.score} pont</strong>
+                  <span className="meta">
+                    {h.finished_at
+                      ? new Date(h.finished_at).toLocaleString("hu-HU")
+                      : "—"}
+                  </span>
                 </div>
               ))}
             </div>
           </section>
+        </div>
+      )}
+
+      {screen === "admin" && (
+        <div className="admin-page">
+          {!profile?.isAdmin ? (
+            <section className="panel">
+              <p className="meta">Nincs admin jogod.</p>
+            </section>
+          ) : !adminStats ? (
+            <section className="panel">
+              <p className="meta">Statisztikák betöltése…</p>
+            </section>
+          ) : (
+            <>
+              <div className="admin-head">
+                <h2 className="panel-title" style={{ margin: 0 }}>
+                  Admin áttekintés
+                </h2>
+                <button className="secondary" type="button" onClick={() => void refreshAdmin()}>
+                  Frissítés
+                </button>
+              </div>
+              <div className="stats-grid admin-overview">
+                {[
+                  ["users", "Felhasználók"],
+                  ["games", "Meccsek összesen"],
+                  ["finishedGames", "Befejezett"],
+                  ["playingGames", "Folyamatban"],
+                  ["pvpGames", "Emberek közt"],
+                  ["aiGames", "Bot ellen"],
+                  ["userWords", "Felvett szavak"],
+                  ["sessions", "Aktív sessionök"],
+                ].map(([key, label]) => (
+                  <div key={key} className="stat">
+                    <span className="meta">{label}</span>
+                    <strong>{adminStats.overview[key] ?? 0}</strong>
+                  </div>
+                ))}
+              </div>
+
+              <div className="split admin-split">
+                <section className="panel">
+                  <h3 className="panel-title">Felhasználók</h3>
+                  <div className="admin-table-wrap">
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Név</th>
+                          <th>Meccs</th>
+                          <th>Győzelem</th>
+                          <th>Legjobb</th>
+                          <th>Szavak</th>
+                          <th>Utoljára</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminStats.users.map((u) => (
+                          <tr key={String(u.id)}>
+                            <td>{String(u.name)}</td>
+                            <td>{String(u.games)}</td>
+                            <td>{String(u.wins)}</td>
+                            <td>{String(u.best_score)}</td>
+                            <td>{String(u.words_added)}</td>
+                            <td>{String(u.last_seen)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="panel">
+                  <h3 className="panel-title">Top játékosok</h3>
+                  <div className="admin-table-wrap">
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Név</th>
+                          <th>Győzelem</th>
+                          <th>Meccs</th>
+                          <th>PvP</th>
+                          <th>AI</th>
+                          <th>Legjobb</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminStats.topPlayers.map((p) => (
+                          <tr key={String(p.name)}>
+                            <td>{String(p.name)}</td>
+                            <td>{String(p.wins)}</td>
+                            <td>{String(p.games)}</td>
+                            <td>{String(p.pvp_wins)}</td>
+                            <td>{String(p.ai_wins)}</td>
+                            <td>{String(p.best_score)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+              </div>
+
+              <section className="panel">
+                <h3 className="panel-title">Legutóbbi meccsek</h3>
+                <div className="admin-table-wrap">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Mikor</th>
+                        <th>Állapot</th>
+                        <th>Típus</th>
+                        <th>Játékosok</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {adminStats.recentGames.map((g) => (
+                        <tr key={String(g.id)}>
+                          <td>{String(g.finished || g.created)}</td>
+                          <td>{String(g.status)}</td>
+                          <td>{Number(g.vs_ai) ? "Bot" : "PvP"}</td>
+                          <td>{String(g.players ?? "—")}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <div className="split admin-split">
+                <section className="panel">
+                  <h3 className="panel-title">Felvett szavak</h3>
+                  <div className="admin-table-wrap">
+                    <table className="admin-table">
+                      <thead>
+                        <tr>
+                          <th>Szó</th>
+                          <th>Ki</th>
+                          <th>Mikor</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {adminStats.words.map((w, i) => (
+                          <tr key={`${w.word}-${i}`}>
+                            <td>
+                              <strong>{String(w.word)}</strong>
+                            </td>
+                            <td>{String(w.added_by)}</td>
+                            <td>{String(w.created)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+                <section className="panel">
+                  <h3 className="panel-title">Szavak felhasználónként</h3>
+                  <div className="player-list">
+                    {adminStats.wordsByUser.map((w) => (
+                      <div className="player-row" key={String(w.name)}>
+                        <span>{String(w.name)}</span>
+                        <strong>{String(w.n)}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </section>
+              </div>
+            </>
+          )}
         </div>
       )}
 

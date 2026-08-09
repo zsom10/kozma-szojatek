@@ -24,6 +24,8 @@ import {
   getLeaderboard,
   getUserProfile,
   appVersion,
+  isAdminName,
+  getAdminStats,
 } from "./db.js";
 import {
   initTables,
@@ -187,7 +189,23 @@ app.get("/api/me", (req, res) => {
   try {
     const user = requireUser(req);
     const profile = getUserProfile(user.id);
-    res.json(profile);
+    res.json({
+      ...profile,
+      isAdmin: isAdminName(user.name),
+    });
+  } catch (e) {
+    res.status(401).json({ error: (e as Error).message });
+  }
+});
+
+app.get("/api/admin/stats", (req, res) => {
+  try {
+    const user = requireUser(req);
+    if (!isAdminName(user.name)) {
+      res.status(403).json({ error: "Nincs admin jog." });
+      return;
+    }
+    res.json(getAdminStats());
   } catch (e) {
     res.status(401).json({ error: (e as Error).message });
   }
