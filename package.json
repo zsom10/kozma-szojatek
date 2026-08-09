@@ -1,0 +1,21 @@
+{
+  "name": "szorako",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build:engine": "npm run build -w @szorako/engine",
+    "test": "npm run test -w @szorako/engine",
+    "dev:server": "npm run dev -w @szorako/server",
+    "dev:web": "npm run dev -w @szorako/web",
+    "dev": "npm run build:engine && concurrently -k \"npm run dev -w @szorako/server\" \"npm run dev -w @szorako/web\"",
+    "build": "npm run build -w @szorako/engine && npm run build -w @szorako/server && npm run build -w @szorako/web",
+    "start": "npm run start -w @szorako/server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2",
+    "typescript": "^5.8.2"
+  }
+}

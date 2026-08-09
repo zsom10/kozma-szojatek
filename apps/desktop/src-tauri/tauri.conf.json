@@ -1,0 +1,32 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Kozma Szojatek",
+  "version": "1.0.0",
+  "identifier": "hu.kozma.szojatek",
+  "build": {
+    "frontendDist": "../web/dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev -w @szorako/web",
+    "beforeBuildCommand": "npm run build -w @szorako/engine && npm run build -w @szorako/web"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Kozma Szójáték",
+        "width": 1200,
+        "height": 860,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/icon.png"
+    ]
+  }
+}
