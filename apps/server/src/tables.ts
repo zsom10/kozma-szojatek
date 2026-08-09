@@ -11,13 +11,14 @@ import {
   exchangeTiles,
   toPublicState,
   chooseBotMove,
+  LETTER_COUNTS,
   type GameState,
   type Placement,
   type BotDifficulty,
   type EndMode,
   type Lexicon,
 } from "@szorako/engine";
-import { recordFinishedGame, saveGameState, addUserWords } from "./db.js";
+import { recordFinishedGame, saveGameState, addUserWords, recordBestMove } from "./db.js";
 
 export type TableSeat = {
   userId: string;
@@ -44,6 +45,12 @@ export type ChatMessage = {
   at: number;
 };
 
+export type DrawReveal = {
+  draws: { userId: string; name: string; letter: string }[];
+  order: string[];
+  until: number;
+};
+
 export type TableInfo = {
   id: number;
   status: "empty" | "lobby" | "playing" | "finished";
@@ -55,6 +62,7 @@ export type TableInfo = {
   spectators: Set<string>;
   challenge: WordChallenge | null;
   chat: ChatMessage[];
+  drawReveal: DrawReveal | null;
   meta: {
     bingos: Record<string, number>;
     passes: Record<string, number>;
@@ -101,6 +109,7 @@ export function initTables(): void {
       spectators: new Set(),
       challenge: null,
       chat: [],
+      drawReveal: null,
       meta: emptyMeta(),
     });
   }
@@ -177,6 +186,9 @@ export function leaveTable(tableId: number, userId: string): void {
     t.status = "empty";
     t.game = null;
     t.hostUserId = null;
+    t.drawReveal = null;
+    t.chat = [];
+    t.challenge = null;
   }
 }
 
@@ -274,6 +286,16 @@ export function startTable(tableId: number, hostId: string): TableInfo {
   if (t.hostUserId !== hostId) throw new Error("Csak a hoszt indíthat.");
   if (t.seats.length < 1) throw new Error("Kell játékos.");
   const host = t.seats.find((s) => s.userId === hostId) ?? t.seats[0];
+
+  const draws = t.seats.map((s) => {
+    let letter = "?";
+    while (letter === "?") {
+      letter = drawOrderLetter();
+    }
+    return { userId: s.userId, name: s.name, letter, seat: s };
+  });
+  draws.sort((a, b) => a.letter.localeCompare(b.letter, "hu"));
+
   let game = createLobby({
     id: nanoid(10),
     host: { id: host.userId, name: host.name },
@@ -282,12 +304,12 @@ export function startTable(tableId: number, hostId: string): TableInfo {
     tableId,
   });
   game.players = [];
-  for (const s of t.seats) {
+  for (const d of draws) {
     game = addPlayer(game, {
-      id: s.userId,
-      name: s.name,
-      isBot: s.isBot,
-      botDifficulty: s.botDifficulty,
+      id: d.seat.userId,
+      name: d.seat.name,
+      isBot: d.seat.isBot,
+      botDifficulty: d.seat.botDifficulty,
     });
   }
   game = startGame(game);
@@ -296,8 +318,29 @@ export function startTable(tableId: number, hostId: string): TableInfo {
   t.challenge = null;
   t.chat = [];
   t.meta = emptyMeta();
+  t.drawReveal = {
+    draws: draws.map(({ userId, name, letter }) => ({ userId, name, letter })),
+    order: draws.map((d) => d.name),
+    until: Date.now() + 2800,
+  };
   saveGameState(game, t.seats.some((s) => s.isBot) && t.seats.filter((s) => !s.isBot).length === 1);
+  setTimeout(() => {
+    const table = tables.get(tableId);
+    if (!table?.drawReveal) return;
+    if (Date.now() < table.drawReveal.until - 50) return;
+    table.drawReveal = null;
+    notifyTable(table);
+  }, 3000);
   return t;
+}
+
+function drawOrderLetter(): string {
+  const pool: string[] = [];
+  for (const [letter, count] of Object.entries(LETTER_COUNTS)) {
+    if (letter === "?") continue;
+    for (let i = 0; i < count; i++) pool.push(letter);
+  }
+  return pool[Math.floor(Math.random() * pool.length)] ?? "A";
 }
 
 function humanIds(game: GameState): string[] {
@@ -420,6 +463,7 @@ export function applyPlace(
   for (const w of result.move.words) {
     if ((t.meta.longest[userId] ?? "").length < w.length) t.meta.longest[userId] = w;
   }
+  recordBestMove(userId, result.move.score, result.move.words);
   afterGameUpdate(t);
   return t;
 }
@@ -497,6 +541,14 @@ export function tickTimeouts(lexicon: Lexicon): number[] {
 
 export function maybeBot(t: TableInfo, lexicon: Lexicon): void {
   if (!t.game || t.game.status !== "playing") return;
+  if (t.drawReveal && Date.now() < t.drawReveal.until) {
+    const wait = Math.max(50, t.drawReveal.until - Date.now() + 80);
+    setTimeout(() => {
+      const table = tables.get(t.id);
+      if (table) maybeBot(table, lexicon);
+    }, wait);
+    return;
+  }
   const cur = t.game.players[t.game.currentPlayerIndex];
   if (!cur?.isBot || cur.eliminated) return;
   setTimeout(() => {
@@ -566,6 +618,7 @@ export function publicTableState(t: TableInfo, viewerId?: string, spectate = fal
       spectatorCount: t.spectators.size,
       challenge: t.challenge,
       chat: t.chat,
+      drawReveal: t.drawReveal,
       humanCount: t.game ? countHumans(t.game) : t.seats.filter((s) => !s.isBot).length,
     },
     game: t.game ? toPublicState(t.game, viewerId, spectate) : null,

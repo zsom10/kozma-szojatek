@@ -61,6 +61,92 @@ export function TurnBanner({
   );
 }
 
+type VoteBannerProps = {
+  show: boolean;
+  challengeId: string;
+  proposerName: string;
+  words: string[];
+  isProposer: boolean;
+  canVote: boolean;
+  onAccept: () => void;
+  onReject: () => void;
+};
+
+export function VoteBanner({
+  show,
+  challengeId,
+  proposerName,
+  words,
+  isProposer,
+  canVote,
+  onAccept,
+  onReject,
+}: VoteBannerProps) {
+  const [key, setKey] = useState(0);
+  const prevId = useRef("");
+
+  useEffect(() => {
+    if (!show) return;
+    if (challengeId && challengeId !== prevId.current) {
+      prevId.current = challengeId;
+      setKey((k) => k + 1);
+    }
+  }, [show, challengeId]);
+
+  if (!show) return null;
+
+  return (
+    <div className="fx-turn has-action vote-overlay" key={key} role="dialog" aria-live="polite">
+      <div className="fx-turn-card vote-card">
+        <p className="vote-kicker">Szószavazás</p>
+        <strong>
+          {proposerName} javasolja: {words.join(", ")}
+        </strong>
+        {isProposer ? (
+          <p className="meta">Várjuk a többiek szavazatát…</p>
+        ) : canVote ? (
+          <div className="actions vote-actions">
+            <button type="button" onClick={onAccept}>
+              Elfogadom
+            </button>
+            <button type="button" className="secondary" onClick={onReject}>
+              Elutasítom
+            </button>
+          </div>
+        ) : (
+          <p className="meta">Már szavaztál, várunk a többiekre…</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+type DrawRevealProps = {
+  show: boolean;
+  draws: { name: string; letter: string }[];
+  order: string[];
+};
+
+export function DrawRevealOverlay({ show, draws, order }: DrawRevealProps) {
+  if (!show || draws.length === 0) return null;
+  return (
+    <div className="fx-turn has-action draw-overlay" role="status" aria-live="polite">
+      <div className="fx-turn-card draw-card">
+        <p className="vote-kicker">Sorrend sorsolás</p>
+        <div className="draw-list">
+          {draws.map((d, i) => (
+            <div className="draw-row" key={`${d.name}-${d.letter}`} style={{ animationDelay: `${i * 0.18}s` }}>
+              <span>{d.name}</span>
+              <strong className="draw-letter">{d.letter}</strong>
+            </div>
+          ))}
+        </div>
+        <p className="meta">Kezd: {order[0] ?? "—"} (ABC sorrend)</p>
+      </div>
+    </div>
+  );
+}
+
 type ConfettiProps = {
   active: boolean;
   celebrate: boolean;

@@ -113,6 +113,17 @@ function migrate(database: DatabaseSync): void {
   ).run(APP_VERSION);
   migrateGamePlayersPk(database);
   migrateAdminColumn(database);
+  migrateBestMoveColumns(database);
+}
+
+function migrateBestMoveColumns(database: DatabaseSync): void {
+  const cols = database.prepare("PRAGMA table_info(user_stats)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "best_move_words")) {
+    database.exec("ALTER TABLE user_stats ADD COLUMN best_move_words TEXT");
+  }
+  if (!cols.some((c) => c.name === "best_move_at")) {
+    database.exec("ALTER TABLE user_stats ADD COLUMN best_move_at INTEGER");
+  }
 }
 
 function migrateAdminColumn(database: DatabaseSync): void {
@@ -384,6 +395,30 @@ export function recordFinishedGame(payload: FinishedPayload): void {
   }
 }
 
+export function recordBestMove(
+  userId: string,
+  score: number,
+  words: string[]
+): void {
+  if (!userId || userId.startsWith("bot-") || score <= 0) return;
+  const database = getDb();
+  const row = database
+    .prepare("SELECT best_move_score FROM user_stats WHERE user_id = ?")
+    .get(userId) as { best_move_score: number } | undefined;
+  if (!row) return;
+  if (score <= Number(row.best_move_score ?? 0)) return;
+  const joined = words.filter(Boolean).join(", ");
+  database
+    .prepare(
+      `UPDATE user_stats SET
+         best_move_score = ?,
+         best_move_words = ?,
+         best_move_at = ?
+       WHERE user_id = ?`
+    )
+    .run(score, joined || null, Date.now(), userId);
+}
+
 export function getLeaderboard() {
   const database = getDb();
   const byScore = database
@@ -404,16 +439,17 @@ export function getLeaderboard() {
        LIMIT 30`
     )
     .all();
-  const byAi = database
+  const byBestMove = database
     .prepare(
-      `SELECT u.name, s.ai_wins, s.ai_losses, s.best_score
+      `SELECT u.name, s.best_move_score AS score, s.best_move_words AS words,
+              datetime(s.best_move_at/1000, 'unixepoch', 'localtime') AS at
        FROM user_stats s JOIN users u ON u.id = s.user_id
-       WHERE s.ai_wins + s.ai_losses > 0
-       ORDER BY s.ai_wins DESC, s.best_score DESC
+       WHERE s.best_move_score > 0
+       ORDER BY s.best_move_score DESC, s.best_move_at DESC
        LIMIT 30`
     )
     .all();
-  return { byScore, byPvp, byAi };
+  return { byScore, byPvp, byBestMove };
 }
 
 export function getUserProfile(userId: string) {

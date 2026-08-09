@@ -482,6 +482,50 @@ button:disabled {
   margin-top: 0.15rem;
 }
 
+.vote-overlay .vote-card,
+.draw-overlay .draw-card {
+  max-width: min(420px, 92vw);
+  gap: 0.85rem;
+}
+
+.vote-kicker {
+  margin: 0;
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.7;
+}
+
+.vote-actions {
+  justify-content: center;
+  width: 100%;
+}
+
+.draw-list {
+  display: grid;
+  gap: 0.45rem;
+  width: 100%;
+}
+
+.draw-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 10px;
+  background: rgba(31, 92, 69, 0.08);
+  animation: fx-slide-up 0.55s cubic-bezier(0.22, 1.15, 0.36, 1) both;
+}
+
+.draw-letter {
+  font-family: "Fraunces", serif;
+  font-size: 1.35rem;
+  color: var(--felt-deep);
+  min-width: 1.6rem;
+  text-align: center;
+}
+
 .fx-turn-card strong {
   font-family: "Fraunces", serif;
   font-size: clamp(1.55rem, 4vw, 2.1rem);

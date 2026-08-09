@@ -102,7 +102,6 @@ function broadcastPresence(): void {
   const payload = JSON.stringify({ type: "presence", people: online });
   for (const [ws, client] of clients) {
     if (ws.readyState !== WebSocket.OPEN) continue;
-    if (client.tableId != null) continue;
     ws.send(payload);
   }
 }
@@ -621,6 +620,10 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
   const type = String(msg.type ?? "");
   if (type === "list") {
     client.ws.send(JSON.stringify({ type: "tables", tables: listTables() }));
+    return;
+  }
+  if (type === "presence") {
+    broadcastPresence();
     return;
   }
   if (type === "join") {

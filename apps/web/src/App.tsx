@@ -15,7 +15,7 @@ import {
   tilePoints,
   type DraftTile,
 } from "./gameUi";
-import { ConfettiBurst, TurnBanner } from "./fx";
+import { ConfettiBurst, TurnBanner, VoteBanner, DrawRevealOverlay } from "./fx";
 
 type Screen = "auth" | "lobby" | "table" | "account" | "leaderboard" | "settings" | "people" | "admin";
 type UiScale = "normal" | "large" | "xlarge" | "xxlarge";
@@ -172,6 +172,11 @@ export function App() {
     challenge?: WordChallenge | null;
     chat?: ChatMessage[];
     humanCount?: number;
+    drawReveal?: {
+      draws: { userId: string; name: string; letter: string }[];
+      order: string[];
+      until: number;
+    } | null;
   } | null>(null);
   const [state, setState] = useState<PublicGameState | null>(null);
   const [spectating, setSpectating] = useState(false);
@@ -190,12 +195,12 @@ export function App() {
       "large") as UiScale;
     return SCALE_STEPS.some((s) => s.id === raw) ? raw : "large";
   });
-  const [lbTab, setLbTab] = useState<"score" | "pvp" | "ai">("score");
+  const [lbTab, setLbTab] = useState<"score" | "pvp" | "bestMove">("score");
   const [leaderboard, setLeaderboard] = useState<{
     byScore: Record<string, unknown>[];
     byPvp: Record<string, unknown>[];
-    byAi: Record<string, unknown>[];
-  }>({ byScore: [], byPvp: [], byAi: [] });
+    byBestMove: Record<string, unknown>[];
+  }>({ byScore: [], byPvp: [], byBestMove: [] });
   const [profile, setProfile] = useState<{
     curiosities: Curiosity[];
     history: HistoryRow[];
@@ -459,6 +464,19 @@ export function App() {
   useEffect(() => {
     if (token) void refreshProfile();
   }, [token, refreshProfile]);
+
+  useEffect(() => {
+    if (screen !== "people" || !token) return;
+    const ping = () => {
+      const socket = wsRef.current;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ type: "presence" }));
+      }
+    };
+    ping();
+    const id = window.setInterval(ping, 6000);
+    return () => clearInterval(id);
+  }, [screen, token, ready]);
 
   useEffect(() => {
     const el = chatLogRef.current;
@@ -1546,8 +1564,12 @@ export function App() {
             <button className={lbTab === "pvp" ? "" : "secondary"} type="button" onClick={() => setLbTab("pvp")}>
               PvP győzelem
             </button>
-            <button className={lbTab === "ai" ? "" : "secondary"} type="button" onClick={() => setLbTab("ai")}>
-              AI győzelem
+            <button
+              className={lbTab === "bestMove" ? "" : "secondary"}
+              type="button"
+              onClick={() => setLbTab("bestMove")}
+            >
+              Legjobb lépés
             </button>
           </div>
           <div className="player-list">
@@ -1555,16 +1577,18 @@ export function App() {
               ? leaderboard.byScore
               : lbTab === "pvp"
                 ? leaderboard.byPvp
-                : leaderboard.byAi
+                : leaderboard.byBestMove
             ).map((row, i) => (
               <div className="player-row" key={`${String(row.name)}-${i}`}>
                 <span>
                   {i + 1}. {String(row.name)}
+                  {lbTab === "bestMove" && row.words ? ` · ${String(row.words)}` : ""}
+                  {lbTab === "bestMove" && row.at ? ` · ${String(row.at)}` : ""}
                 </span>
                 <strong>
                   {lbTab === "score" && `${row.best_score} pont`}
                   {lbTab === "pvp" && `${row.pvp_wins} győzelem`}
-                  {lbTab === "ai" && `${row.ai_wins} győzelem`}
+                  {lbTab === "bestMove" && `${row.score} pont`}
                 </strong>
               </div>
             ))}
@@ -1925,33 +1949,6 @@ export function App() {
                         </button>
                       </div>
                     )}
-                    {tableMeta.challenge && (
-                      <div className="accept-box vote-box">
-                        <p>
-                          <strong>{tableMeta.challenge.proposerName}</strong> szavakat javasol:{" "}
-                          <strong>{tableMeta.challenge.words.join(", ")}</strong>
-                        </p>
-                        {tableMeta.challenge.proposerId === user?.id ? (
-                          <p className="meta">Várjuk a többiek szavazatát…</p>
-                        ) : tableMeta.challenge.voterIds.includes(user?.id ?? "") &&
-                          !tableMeta.challenge.votes[user?.id ?? ""] ? (
-                          <div className="actions">
-                            <button type="button" onClick={() => void voteWord(true)}>
-                              Elfogadom
-                            </button>
-                            <button
-                              className="secondary"
-                              type="button"
-                              onClick={() => void voteWord(false)}
-                            >
-                              Elutasítom
-                            </button>
-                          </div>
-                        ) : (
-                          <p className="meta">Szavazat rögzítve / várakozás</p>
-                        )}
-                      </div>
-                    )}
                   </>
                 )}
 
@@ -2006,6 +2003,9 @@ export function App() {
                     ? "VÁRÓ"
                     : "VÉGE"}
               </div>
+              {state?.status === "playing" && (
+                <p className="meta">Meccs ideje: {formatTime(Math.max(0, now - state.createdAt))}</p>
+              )}
               <p className="meta">
                 {spectating
                   ? "Néző mód"
@@ -2076,7 +2076,7 @@ export function App() {
       )}
 
       <TurnBanner
-        show={isMyTurn}
+        show={isMyTurn && !tableMeta?.challenge && !tableMeta?.drawReveal}
         epoch={
           state
             ? `${state.moveCount}:${state.currentPlayerIndex}:${user?.id ?? ""}`
@@ -2089,6 +2089,25 @@ export function App() {
           setScreen("table");
           wsAttach("resume", activeTableId);
         }}
+      />
+      <VoteBanner
+        show={!!tableMeta?.challenge && screen === "table" && !spectating}
+        challengeId={tableMeta?.challenge?.id ?? ""}
+        proposerName={tableMeta?.challenge?.proposerName ?? ""}
+        words={tableMeta?.challenge?.words ?? []}
+        isProposer={tableMeta?.challenge?.proposerId === user?.id}
+        canVote={
+          !!tableMeta?.challenge &&
+          tableMeta.challenge.voterIds.includes(user?.id ?? "") &&
+          !tableMeta.challenge.votes[user?.id ?? ""]
+        }
+        onAccept={() => void voteWord(true)}
+        onReject={() => void voteWord(false)}
+      />
+      <DrawRevealOverlay
+        show={!!tableMeta?.drawReveal && screen === "table"}
+        draws={tableMeta?.drawReveal?.draws ?? []}
+        order={tableMeta?.drawReveal?.order ?? []}
       />
       <ConfettiBurst
         active={!!state && state.status === "finished" && screen === "table"}
