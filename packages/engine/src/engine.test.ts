@@ -169,6 +169,28 @@ describe("scoring house rules", () => {
     assert.equal(state.mustPlayBlank, true);
   });
 
+  it("swapBlank works for second player on their turn", () => {
+    let state = createLobby({ id: "g4", host: { id: "host", name: "Hoszt" } });
+    state = addPlayer(state, { id: "guest", name: "Vendég" });
+    state = startGame(state, 2);
+    const board = emptyBoard();
+    board[CENTER][CENTER] = { letter: "Á", isBlank: true };
+    state = {
+      ...state,
+      board,
+      currentPlayerIndex: 1,
+      players: state.players.map((p) =>
+        p.id === "guest"
+          ? { ...p, rack: ["Á", "B", "C", "D", "E", "F", "G"] }
+          : p
+      ),
+    };
+    state = swapBlank(state, "guest", CENTER, CENTER);
+    assert.equal(state.board[CENTER][CENTER]?.isBlank, false);
+    assert.ok(state.players[1].rack.includes("?"));
+    assert.equal(state.mustPlayBlank, true);
+  });
+
   it("rack blank penalty is 10", () => {
     assert.equal(rackPoints(["?"], 10), 10);
     assert.equal(rackPoints(["A", "?"], 10), 11);

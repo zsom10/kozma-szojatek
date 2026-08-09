@@ -213,7 +213,29 @@ export function App() {
   ): PublicGameState | null {
     if (!next) return null;
     if (prev && next.moveCount < prev.moveCount) return prev;
-    if (prev && next.moveCount === prev.moveCount) return prev;
+    if (prev && next.moveCount === prev.moveCount) {
+      const prevKey = [
+        prev.mustPlayBlank ? 1 : 0,
+        prev.currentPlayerIndex,
+        prev.players.map((p) => `${p.id}:${p.rackCount}:${(p.rack ?? []).join(",")}`).join("|"),
+        prev.board
+          .flatMap((row, r) =>
+            row.flatMap((c, col) => (c?.isBlank ? [`${r},${col},${c.letter}`] : []))
+          )
+          .join(";"),
+      ].join("#");
+      const nextKey = [
+        next.mustPlayBlank ? 1 : 0,
+        next.currentPlayerIndex,
+        next.players.map((p) => `${p.id}:${p.rackCount}:${(p.rack ?? []).join(",")}`).join("|"),
+        next.board
+          .flatMap((row, r) =>
+            row.flatMap((c, col) => (c?.isBlank ? [`${r},${col},${c.letter}`] : []))
+          )
+          .join(";"),
+      ].join("#");
+      if (prevKey === nextKey) return prev;
+    }
     return next;
   }
 
@@ -725,33 +747,52 @@ export function App() {
     const letterRaw = myRack[rackIndex];
     if (!letterRaw) return;
     const isBlank = letterRaw === "?";
-    const letter = isBlank ? blankLetter.toUpperCase() : letterRaw;
+    const letter = isBlank
+      ? blankLetter.toLocaleUpperCase("hu").normalize("NFC")
+      : letterRaw.toLocaleUpperCase("hu").normalize("NFC");
     setDrafts((d) => [...d, { rackIndex, letter, isBlank, row, col }]);
     setSelectedRack(null);
     setError("");
     setInvalidWords([]);
   }
 
+  async function doSwapBlank(row: number, col: number) {
+    if (!tableMeta || !state) return;
+    setBusy("swap");
+    try {
+      const data = await api(`/api/tables/${tableMeta.id}/swap-blank`, {
+        method: "POST",
+        body: JSON.stringify({ row, col }),
+      });
+      applyTablePayload(data, false);
+      wsAttach("resume", tableMeta.id);
+      setSwapMode(false);
+      setSelectedRack(null);
+      setError("");
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
   function onCellClick(row: number, col: number) {
     if (!isMyTurn || !state || !tableMeta) return;
-    if (swapMode) {
-      const cell = state.board[row][col];
-      if (cell?.isBlank) {
-        void (async () => {
-          try {
-            const data = await api(`/api/tables/${tableMeta.id}/swap-blank`, {
-              method: "POST",
-              body: JSON.stringify({ row, col }),
-            });
-            applyTablePayload(data, false);
-            wsAttach("resume", tableMeta.id);
-            setSwapMode(false);
-            setError("");
-          } catch (e) {
-            setError((e as Error).message);
-          }
-        })();
+    const cell = state.board[row][col];
+    if (cell?.isBlank) {
+      const want = cell.letter.toLocaleUpperCase("hu").normalize("NFC");
+      const have = myRack.some(
+        (t) => t !== "?" && t.toLocaleUpperCase("hu").normalize("NFC") === want
+      );
+      if (have) {
+        void doSwapBlank(row, col);
+        return;
       }
+      setError(`Nincs nálad a valódi betű (${cell.letter}), ezért nem cserélheted a jollyt.`);
+      return;
+    }
+    if (swapMode) {
+      setError("A csíkozott, J jelű jolly zsetonra kattints a táblán.");
       return;
     }
     const existing = state.board[row][col];
@@ -1349,8 +1390,9 @@ export function App() {
             Jolly visszacseréje
           </h2>
           <p className="meta">
-            Ha valaki jollyval (üres zsetonnal) rakott le egy betűt, és nálad megvan az a valódi betű,
-            saját körödben kicserélheted: a táblán a valódi betű marad, a jolly visszakerül a tartódba.
+            Ha a táblán jolly (üres, J jelű zseton) van, és nálad megvan a valódi betű, saját
+            körödben kattints rá — kicserélődik, a jolly visszakerül a tartódba, és abban a körben
+            le kell raknod.
           </p>
         </section>
       )}
@@ -1492,10 +1534,20 @@ export function App() {
                         const isLast = !!state.lastMove?.placements.some(
                           (p) => p.row === r && p.col === c
                         );
+                        const canSwapBlank =
+                          !!show?.isBlank &&
+                          isMyTurn &&
+                          !spectating &&
+                          myRack.some(
+                            (t) =>
+                              t !== "?" &&
+                              t.toLocaleUpperCase("hu").normalize("NFC") ===
+                                show.letter.toLocaleUpperCase("hu").normalize("NFC")
+                          );
                         return (
                           <div
                             key={`${r}-${c}`}
-                            className={`cell ${premiumClass(prem)}`}
+                            className={`cell ${premiumClass(prem)} ${canSwapBlank ? "can-swap" : ""} ${swapMode ? "swap-mode" : ""}`}
                             onClick={() => onCellClick(r, c)}
                             onDragOver={(e) => e.preventDefault()}
                             onDrop={(e) => {
@@ -1507,7 +1559,7 @@ export function App() {
                           >
                             {show ? (
                               <div
-                                className={`tile ${draft ? "draft" : ""} ${show.isBlank ? "blank" : ""} ${isLast ? "last-move" : ""}`}
+                                className={`tile ${draft ? "draft" : ""} ${show.isBlank ? "blank" : ""} ${isLast ? "last-move" : ""} ${canSwapBlank ? "swap-ready" : ""}`}
                               >
                                 {show.isBlank && <span className="jolly-badge">J</span>}
                                 <span className="letter">{show.letter}</span>
@@ -1601,11 +1653,14 @@ export function App() {
                         </button>
                         <button
                           className={swapMode ? "" : "secondary"}
-                          disabled={!isMyTurn}
+                          disabled={!isMyTurn || busy === "swap"}
                           type="button"
-                          onClick={() => setSwapMode((v) => !v)}
+                          onClick={() => {
+                            setSwapMode((v) => !v);
+                            setError("");
+                          }}
                         >
-                          {swapMode ? "Csere: kattints a jollyra" : "Jolly"}
+                          {swapMode ? "Csere mód be" : "Jolly csere"}
                         </button>
                         <button
                           className="secondary"
@@ -1629,10 +1684,28 @@ export function App() {
                     </div>
                     {swapMode && (
                       <p className="meta center help-tip">
-                        Ha a táblán van egy jolly (üres zseton), és nálad megvan a valódi betű,
-                        kicserélheted: a jolly visszakerül a tartódba, a táblán a valódi betű marad.
+                        Kattints a táblán a csíkozott, J jelű jollyra. Ha nálad van a valódi betű,
+                        azonnal kicseréli — a jolly visszakerül a tartódba, és ebben a körben le kell raknod.
                       </p>
                     )}
+                    {isMyTurn &&
+                      !swapMode &&
+                      state.board.some((row) =>
+                        row.some(
+                          (c) =>
+                            !!c?.isBlank &&
+                            myRack.some(
+                              (t) =>
+                                t !== "?" &&
+                                t.toLocaleUpperCase("hu").normalize("NFC") ===
+                                  c.letter.toLocaleUpperCase("hu").normalize("NFC")
+                            )
+                        )
+                      ) && (
+                        <p className="meta center help-tip">
+                          Van nálad betű egy jollyhoz — kattints a zölden kiemelt J zsetonra a cseréhez.
+                        </p>
+                      )}
                     {invalidWords.length > 0 && (
                       <div className="accept-box">
                         <p>

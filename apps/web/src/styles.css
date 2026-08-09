@@ -721,6 +721,20 @@ button:disabled {
   z-index: 2;
 }
 
+.tile.swap-ready {
+  outline: 2.5px solid #1f5c45;
+  outline-offset: 1px;
+  box-shadow:
+    0 0 0 3px rgba(31, 92, 69, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+  z-index: 3;
+}
+
+.cell.can-swap {
+  cursor: pointer;
+}
+
 @keyframes last-move-pulse {
   0%,
   100% {

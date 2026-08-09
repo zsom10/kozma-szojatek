@@ -300,6 +300,7 @@ app.post("/api/tables/:id/swap-blank", (req, res) => {
     const row = Number(req.body?.row);
     const col = Number(req.body?.col);
     const t = applySwap(id, user.id, row, col);
+    broadcastTable(id);
     maybeBot(t, lexicon);
     res.json(publicTableState(t, user.id));
   } catch (e) {

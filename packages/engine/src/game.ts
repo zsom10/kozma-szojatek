@@ -334,6 +334,10 @@ export function timeoutPass(state: GameState, rules?: Rules): GameState {
   return passTurn(state, player.id, rules ?? { ...DEFAULT_RULES, endMode: state.endMode });
 }
 
+function normTile(letter: string): string {
+  return letter.toLocaleUpperCase("hu").normalize("NFC");
+}
+
 export function swapBlank(
   state: GameState,
   playerId: string,
@@ -348,7 +352,8 @@ export function swapBlank(
   }
   const cell = state.board[row]?.[col];
   if (!cell || !cell.isBlank) throw new Error("Itt nincs jolly.");
-  const letterIdx = player.rack.indexOf(cell.letter);
+  const want = normTile(cell.letter);
+  const letterIdx = player.rack.findIndex((t) => normTile(t) === want);
   if (letterIdx === -1) {
     throw new Error(`Nincs nálad a valódi betű: ${cell.letter}`);
   }
@@ -356,7 +361,7 @@ export function swapBlank(
   rack.splice(letterIdx, 1);
   rack.push("?");
   const board = state.board.map((r) => r.map((c) => (c ? { ...c } : null)));
-  board[row][col] = { letter: cell.letter, isBlank: false };
+  board[row][col] = { letter: want, isBlank: false };
   const players = state.players.map((p, i) =>
     i === idx ? { ...player, rack } : p
   );
