@@ -732,7 +732,7 @@ export function App() {
   }
 
   return (
-    <div className="app shell">
+    <div className={`app shell ${screen === "table" ? "on-table" : ""}`}>
       <header className="topbar">
         <div>
           <h1 className="brand brand-sm">Kozma Szójáték</h1>
@@ -742,13 +742,13 @@ export function App() {
           <button className="secondary" type="button" onClick={() => setScreen("lobby")}>
             Asztalok
           </button>
-          <button className="secondary" type="button" onClick={() => setScreen("account")}>
+          <button className="secondary nav-extra" type="button" onClick={() => setScreen("account")}>
             Fiókom
           </button>
-          <button className="secondary" type="button" onClick={() => setScreen("leaderboard")}>
+          <button className="secondary nav-extra" type="button" onClick={() => setScreen("leaderboard")}>
             Ranglista
           </button>
-          <button className="secondary" type="button" onClick={() => setScreen("settings")}>
+          <button className="secondary nav-extra" type="button" onClick={() => setScreen("settings")}>
             Beállítások
           </button>
           <button className="secondary" type="button" onClick={logout}>
@@ -1096,93 +1096,95 @@ export function App() {
 
                 {state.status === "playing" && !spectating && (
                   <>
-                    <div className="rack">
-                      {myRack.map((letter, i) => (
-                        <button
-                          key={`${letter}-${i}`}
-                          className={`tile rack-tile ${selectedRack === i ? "selected" : ""} ${letter === "?" ? "blank-rack" : ""}`}
-                          disabled={usedRack.has(i) || !isMyTurn}
-                          draggable={isMyTurn && !usedRack.has(i)}
-                          onDragStart={() => setDragRack(i)}
-                          onDragEnd={() => setDragRack(null)}
-                          onClick={() => setSelectedRack((cur) => (cur === i ? null : i))}
-                          type="button"
-                          style={{ opacity: usedRack.has(i) ? 0.25 : 1 }}
-                        >
-                          <span className="keyhint">{i + 1}</span>
-                          {letter === "?" ? (
-                            <>
-                              <span className="jolly-badge">J</span>
-                              <span className="letter">★</span>
-                              <span className="pts">0</span>
-                            </>
-                          ) : (
-                            <>
-                              <span className="letter">{letter}</span>
-                              <span className="pts">{tilePoints(letter, false)}</span>
-                            </>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-                    {selectedRack != null && myRack[selectedRack] === "?" && (
-                      <div className="field blank-picker">
-                        <label>Jolly betű</label>
-                        <select value={blankLetter} onChange={(e) => setBlankLetter(e.target.value)}>
-                          {blankChoices().map((ch) => (
-                            <option key={ch} value={ch}>
-                              {ch}
-                            </option>
-                          ))}
-                        </select>
+                    <div className="play-dock">
+                      <div className="rack">
+                        {myRack.map((letter, i) => (
+                          <button
+                            key={`${letter}-${i}`}
+                            className={`tile rack-tile ${selectedRack === i ? "selected" : ""} ${letter === "?" ? "blank-rack" : ""}`}
+                            disabled={usedRack.has(i) || !isMyTurn}
+                            draggable={isMyTurn && !usedRack.has(i)}
+                            onDragStart={() => setDragRack(i)}
+                            onDragEnd={() => setDragRack(null)}
+                            onClick={() => setSelectedRack((cur) => (cur === i ? null : i))}
+                            type="button"
+                            style={{ opacity: usedRack.has(i) ? 0.25 : 1 }}
+                          >
+                            <span className="keyhint">{i + 1}</span>
+                            {letter === "?" ? (
+                              <>
+                                <span className="jolly-badge">J</span>
+                                <span className="letter">★</span>
+                                <span className="pts">0</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="letter">{letter}</span>
+                                <span className="pts">{tilePoints(letter, false)}</span>
+                              </>
+                            )}
+                          </button>
+                        ))}
                       </div>
-                    )}
-                    <div className="actions center">
-                      <button
-                        disabled={!isMyTurn || drafts.length === 0}
-                        type="button"
-                        onClick={() => void submitPlace()}
-                      >
-                        Lerakás
-                      </button>
-                      <button
-                        className="secondary"
-                        disabled={!isMyTurn}
-                        type="button"
-                        onClick={() => {
-                          setDrafts([]);
-                          setInvalidWords([]);
-                          setError("");
-                        }}
-                      >
-                        Törlés
-                      </button>
-                      <button
-                        className={swapMode ? "" : "secondary"}
-                        disabled={!isMyTurn}
-                        type="button"
-                        onClick={() => setSwapMode((v) => !v)}
-                      >
-                        {swapMode ? "Csere: kattints a jollyra" : "Jolly visszacseréje"}
-                      </button>
-                      <button
-                        className="secondary"
-                        disabled={!isMyTurn}
-                        type="button"
-                        onClick={() => void submitPass()}
-                      >
-                        Passz
-                      </button>
-                      {state.endMode === "B" && (
+                      {selectedRack != null && myRack[selectedRack] === "?" && (
+                        <div className="field blank-picker">
+                          <label>Jolly betű</label>
+                          <select value={blankLetter} onChange={(e) => setBlankLetter(e.target.value)}>
+                            {blankChoices().map((ch) => (
+                              <option key={ch} value={ch}>
+                                {ch}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      )}
+                      <div className="actions center play-actions">
+                        <button
+                          disabled={!isMyTurn || drafts.length === 0}
+                          type="button"
+                          onClick={() => void submitPlace()}
+                        >
+                          Lerakás
+                        </button>
                         <button
                           className="secondary"
                           disabled={!isMyTurn}
                           type="button"
-                          onClick={() => void submitResign()}
+                          onClick={() => {
+                            setDrafts([]);
+                            setInvalidWords([]);
+                            setError("");
+                          }}
                         >
-                          Feladom
+                          Törlés
                         </button>
-                      )}
+                        <button
+                          className={swapMode ? "" : "secondary"}
+                          disabled={!isMyTurn}
+                          type="button"
+                          onClick={() => setSwapMode((v) => !v)}
+                        >
+                          {swapMode ? "Csere: kattints a jollyra" : "Jolly"}
+                        </button>
+                        <button
+                          className="secondary"
+                          disabled={!isMyTurn}
+                          type="button"
+                          onClick={() => void submitPass()}
+                        >
+                          Passz
+                        </button>
+                        {state.endMode === "B" && (
+                          <button
+                            className="secondary"
+                            disabled={!isMyTurn}
+                            type="button"
+                            onClick={() => void submitResign()}
+                          >
+                            Feladom
+                          </button>
+                        )}
+                      </div>
                     </div>
                     {swapMode && (
                       <p className="meta center help-tip">
