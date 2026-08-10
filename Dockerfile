@@ -24,4 +24,4 @@ ENV DATA_DIR=/data
 
 EXPOSE 8787
 
-CMD ["npm", "start"]
+CMD ["node", "apps/server/dist/index.js"]

@@ -844,6 +844,24 @@ server.listen(PORT, () => {
   console.log(`Kozma Szójáték ${APP_VERSION} :${PORT}`);
 });
 
+function shutdown(signal: string): void {
+  console.log(`${signal} — leállítás…`);
+  for (const [ws] of clients) {
+    try {
+      ws.close();
+    } catch {
+      /* ignore */
+    }
+  }
+  server.close(() => {
+    process.exit(0);
+  });
+  setTimeout(() => process.exit(0), 8000).unref();
+}
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
 process.on("uncaughtException", (err) => {
   console.error("uncaughtException (szerver él tovább):", err);
 });
