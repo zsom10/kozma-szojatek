@@ -36,7 +36,8 @@ import {
   getTable,
   joinTable,
   resumeTable,
-  leaveTable,
+  abandonTable,
+  hostResetTable,
   spectateTable,
   configureTable,
   addBotToTable,
@@ -475,8 +476,26 @@ app.post("/api/tables/:id/resign", (req, res) => {
 app.post("/api/tables/:id/leave", (req, res) => {
   try {
     const user = requireUser(req);
-    leaveTable(Number(req.params.id), user.id);
-    res.json({ ok: true, tables: listTables() });
+    const id = Number(req.params.id);
+    const t = abandonTable(id, user.id);
+    if (t) {
+      broadcastTable(id);
+      maybeBot(t, lexicon);
+    }
+    res.json({ ok: true, tables: listTables(), ...(t ? publicTableState(t, user.id) : {}) });
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+
+app.post("/api/tables/:id/reset", (req, res) => {
+  try {
+    const user = requireUser(req);
+    const id = Number(req.params.id);
+    const t = hostResetTable(id, user.id, user.name);
+    broadcastTable(id);
+    broadcastPresence();
+    res.json(publicTableState(t, user.id));
   } catch (e) {
     res.status(400).json({ error: (e as Error).message });
   }
@@ -586,12 +605,33 @@ wss.on("connection", (ws, req) => {
   }
 
   ws.on("close", () => {
-    if (client.tableId != null) {
-      const t = getTable(client.tableId);
-      t?.spectators.delete(client.userId);
-    }
+    const tableId = client.tableId;
+    const userId = client.userId;
+    const wasSpectating = client.spectating;
     clients.delete(ws);
     broadcastPresence();
+    if (tableId == null) return;
+    if (wasSpectating) {
+      const t = getTable(tableId);
+      t?.spectators.delete(userId);
+      if (t) broadcastTable(tableId);
+      return;
+    }
+    setTimeout(() => {
+      const reconnected = [...clients.values()].some(
+        (c) =>
+          c.userId === userId &&
+          c.tableId === tableId &&
+          c.ws.readyState === WebSocket.OPEN
+      );
+      if (reconnected) return;
+      const t = abandonTable(tableId, userId);
+      if (t) {
+        broadcastTable(tableId);
+        maybeBot(t, lexicon);
+      }
+      broadcastPresence();
+    }, 20000);
   });
 
   ws.on("message", (raw) => {
@@ -663,8 +703,12 @@ function handleWs(client: Client, msg: Record<string, unknown>): void {
   }
   if (type === "leave") {
     if (client.tableId != null) {
-      leaveTable(client.tableId, client.userId);
-      broadcastTable(client.tableId);
+      const id = client.tableId;
+      const t = abandonTable(id, client.userId);
+      if (t) {
+        broadcastTable(id);
+        maybeBot(t, lexicon);
+      }
       client.tableId = null;
       client.spectating = false;
     }

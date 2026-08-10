@@ -8,6 +8,7 @@ import {
   timeoutPass,
   swapBlank,
   resignTurn,
+  forfeitPlayer,
   exchangeTiles,
   toPublicState,
   chooseBotMove,
@@ -144,17 +145,54 @@ export function joinTable(
   if (t.seats.some((s) => s.userId === user.id)) return t;
   if (t.status === "playing") throw new Error("A meccs már zajlik — nézőként csatlakozz.");
   if (t.seats.filter((s) => !s.isBot).length >= 4) throw new Error("Tele az asztal.");
-  if (t.status === "finished") {
-    t.seats = [];
-    t.game = null;
-    t.meta = emptyMeta();
-    t.status = "empty";
-    t.hostUserId = null;
+  if (t.status === "finished" || t.status === "empty") {
+    resetTableLobby(t);
   }
+  sanitizeTable(t);
   t.seats.push({ userId: user.id, name: user.name, isBot: false });
   if (!t.hostUserId) t.hostUserId = user.id;
   t.status = "lobby";
   return t;
+}
+
+function resetTableLobby(t: TableInfo): void {
+  t.seats = [];
+  t.hostUserId = null;
+  t.game = null;
+  t.meta = emptyMeta();
+  t.challenge = null;
+  t.drawReveal = null;
+  t.chat = [];
+  t.status = "empty";
+}
+
+export function sanitizeTable(t: TableInfo): void {
+  const playing =
+    t.status === "playing" && !!t.game && t.game.status === "playing";
+  if (!playing) {
+    t.challenge = null;
+    t.drawReveal = null;
+    if (t.status === "lobby" || t.status === "empty") {
+      if (t.game && t.game.status !== "lobby") t.game = null;
+    }
+  }
+  if (t.challenge && playing) {
+    const alive = new Set(humanIds(t.game!).filter((id) => {
+      const p = t.game!.players.find((x) => x.id === id);
+      return p && !p.eliminated;
+    }));
+    if (!alive.has(t.challenge.proposerId)) {
+      t.challenge = null;
+    } else {
+      t.challenge.voterIds = t.challenge.voterIds.filter((id) => alive.has(id));
+      for (const id of Object.keys(t.challenge.votes)) {
+        if (!t.challenge.voterIds.includes(id)) delete t.challenge.votes[id];
+      }
+      if (t.challenge.voterIds.length === 0) {
+        t.challenge = null;
+      }
+    }
+  }
 }
 
 export function resumeTable(
@@ -183,13 +221,76 @@ export function leaveTable(tableId: number, userId: string): void {
     t.hostUserId = t.seats.find((s) => !s.isBot)?.userId ?? null;
   }
   if (t.seats.length === 0) {
+    resetTableLobby(t);
     t.status = "empty";
-    t.game = null;
-    t.hostUserId = null;
-    t.drawReveal = null;
-    t.chat = [];
-    t.challenge = null;
   }
+}
+
+export function abandonTable(tableId: number, userId: string): TableInfo | null {
+  const t = tables.get(tableId);
+  if (!t) return null;
+  t.spectators.delete(userId);
+
+  if (t.status === "playing" && t.game && t.game.status === "playing") {
+    const seated = t.seats.some((s) => s.userId === userId && !s.isBot);
+    if (!seated) {
+      notifyTable(t);
+      return t;
+    }
+
+    if (t.challenge) {
+      if (t.challenge.proposerId === userId) {
+        t.challenge = null;
+      } else if (t.challenge.voterIds.includes(userId)) {
+        t.challenge.voterIds = t.challenge.voterIds.filter((id) => id !== userId);
+        delete t.challenge.votes[userId];
+        if (t.challenge.voterIds.length === 0) t.challenge = null;
+      }
+    }
+
+    const player = t.game.players.find((p) => p.id === userId);
+    if (player && !player.eliminated) {
+      t.game = forfeitPlayer(t.game, userId);
+      bump(t.meta.passes, userId);
+    }
+
+    t.seats = t.seats.filter((s) => s.userId !== userId);
+    if (t.hostUserId === userId) {
+      t.hostUserId = t.seats.find((s) => !s.isBot)?.userId ?? null;
+    }
+
+    const humansLeft = t.game.players.filter((p) => !p.isBot && !p.eliminated);
+    if (humansLeft.length === 0) {
+      if (t.game.status === "playing") {
+        const remaining = t.game.players.filter((p) => !p.eliminated);
+        if (remaining.length > 0) {
+          t.game = {
+            ...t.game,
+            status: "finished",
+            turnDeadlineAt: null,
+            winnerIds: remaining
+              .sort((a, b) => b.score - a.score)
+              .filter((p) => p.score === remaining[0].score)
+              .map((p) => p.id),
+          };
+        } else {
+          t.game = { ...t.game, status: "finished", turnDeadlineAt: null, winnerIds: [] };
+        }
+      }
+      afterGameUpdate(t);
+      resetTableLobby(t);
+      t.status = "empty";
+      notifyTable(t);
+      return t;
+    }
+
+    afterGameUpdate(t);
+    return t;
+  }
+
+  leaveTable(tableId, userId);
+  notifyTable(t);
+  return t;
 }
 
 export function spectateTable(tableId: number, userId: string): TableInfo {
@@ -522,6 +623,7 @@ export function tickTimeouts(lexicon: Lexicon): number[] {
   for (const t of tables.values()) {
     try {
       if (!t.game || t.game.status !== "playing") continue;
+      if (t.challenge) continue;
       const before = t.game.moveCount;
       const player = t.game.players[t.game.currentPlayerIndex];
       const next = timeoutPass(t.game);
@@ -586,12 +688,15 @@ export function maybeBot(t: TableInfo, lexicon: Lexicon): void {
 
 function afterGameUpdate(t: TableInfo): void {
   if (!t.game) return;
+  sanitizeTable(t);
   const vsAi =
     t.game.players.some((p) => p.isBot) &&
     t.game.players.filter((p) => !p.isBot).length === 1;
   saveGameState(t.game, vsAi);
   if (t.game.status === "finished") {
     t.status = "finished";
+    t.challenge = null;
+    t.drawReveal = null;
     recordFinishedGame({
       game: t.game,
       vsAi,
@@ -607,6 +712,7 @@ function afterGameUpdate(t: TableInfo): void {
 }
 
 export function publicTableState(t: TableInfo, viewerId?: string, spectate = false) {
+  sanitizeTable(t);
   return {
     table: {
       id: t.id,
@@ -616,11 +722,32 @@ export function publicTableState(t: TableInfo, viewerId?: string, spectate = fal
       hostUserId: t.hostUserId,
       seats: t.seats,
       spectatorCount: t.spectators.size,
-      challenge: t.challenge,
+      challenge:
+        t.status === "playing" && t.game?.status === "playing" ? t.challenge : null,
       chat: t.chat,
       drawReveal: t.drawReveal,
       humanCount: t.game ? countHumans(t.game) : t.seats.filter((s) => !s.isBot).length,
     },
     game: t.game ? toPublicState(t.game, viewerId, spectate) : null,
   };
+}
+
+export function hostResetTable(
+  tableId: number,
+  hostId: string,
+  hostName: string
+): TableInfo {
+  const t = tables.get(tableId);
+  if (!t) throw new Error("Nincs ilyen asztal.");
+  if (t.hostUserId !== hostId) throw new Error("Csak a hoszt resetelhet.");
+  t.game = null;
+  t.meta = emptyMeta();
+  t.challenge = null;
+  t.drawReveal = null;
+  t.chat = [];
+  t.seats = [{ userId: hostId, name: hostName, isBot: false }];
+  t.hostUserId = hostId;
+  t.status = "lobby";
+  notifyTable(t);
+  return t;
 }

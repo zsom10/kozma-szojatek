@@ -322,6 +322,21 @@ export function resignTurn(
   if (!player || player.id !== playerId || player.eliminated) {
     throw new Error("Nem a te köröd.");
   }
+  return forfeitPlayer(state, playerId, rules);
+}
+
+export function forfeitPlayer(
+  state: GameState,
+  playerId: string,
+  rules: Rules = { ...DEFAULT_RULES, endMode: state.endMode }
+): GameState {
+  if (state.status !== "playing") return state;
+  const idx = state.players.findIndex((p) => p.id === playerId);
+  if (idx < 0) return state;
+  const player = state.players[idx];
+  if (player.eliminated) return state;
+
+  const wasCurrent = state.currentPlayerIndex === idx;
   const players = state.players.map((p, i) =>
     i === idx ? deductRack(p, blankPenalty(rules)) : p
   );
@@ -330,6 +345,7 @@ export function resignTurn(
     players,
     consecutivePasses: 0,
     moveCount: state.moveCount + 1,
+    mustPlayBlank: wasCurrent ? false : !!state.mustPlayBlank,
     lastMove: {
       playerId: player.id,
       playerName: player.name,
@@ -338,9 +354,19 @@ export function resignTurn(
       score: 0,
     },
   };
-  next = finalizeModeBIfDone(next, rules);
-  if (next.status === "finished") return next;
-  return advanceTurn(next, idx);
+
+  if (state.endMode === "A") {
+    const active = next.players.filter((p) => !p.eliminated);
+    if (active.length <= 1) return finishGame(next, next.players);
+  } else {
+    next = finalizeModeBIfDone(next, rules);
+    if (next.status === "finished") return next;
+  }
+
+  if (wasCurrent || next.players[next.currentPlayerIndex]?.eliminated) {
+    next = advanceTurn(next, idx);
+  }
+  return next;
 }
 
 export function timeoutPass(state: GameState, rules?: Rules): GameState {

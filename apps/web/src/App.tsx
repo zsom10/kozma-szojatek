@@ -642,10 +642,13 @@ export function App() {
     if (!tableMeta) return;
     const playing = tableMeta.status === "playing" || state?.status === "playing";
     if (playing) {
-      setScreen("lobby");
-      setBusy("");
-      refreshTables();
-      return;
+      if (
+        !confirm(
+          "Kilépsz a meccsből? Ez feladásként számít, és a többiek folytatják nélküled."
+        )
+      ) {
+        return;
+      }
     }
     setBusy("leave");
     try {
@@ -661,6 +664,21 @@ export function App() {
     setSpectating(false);
     setBusy("");
     refreshTables();
+  }
+
+  async function resetTableClick() {
+    if (!tableMeta) return;
+    if (!confirm("Asztal reset: meccs és szavazás törlése, tiszta váró?")) return;
+    setBusy("reset");
+    try {
+      const data = await api(`/api/tables/${tableMeta.id}/reset`, { method: "POST" });
+      applyTablePayload(data, false);
+      wsAttach("join", tableMeta.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy("");
+    }
   }
 
   async function submitPlace() {
@@ -1661,7 +1679,8 @@ export function App() {
               </div>
             </div>
 
-            {(tableMeta.status === "lobby" || tableMeta.status === "empty" || !state || state.status === "lobby") && (
+            {(tableMeta.status === "lobby" || tableMeta.status === "empty") &&
+              (!state || state.status === "lobby") && (
               <div className="waiting-room">
                 <h2 className="panel-title">Asztal {tableMeta.id} – váró</h2>
                 <p className="meta">
@@ -1742,6 +1761,14 @@ export function App() {
                         onClick={() => startTableClick()}
                       >
                         {busy === "start" ? "Indítás…" : "Indítás"}
+                      </button>
+                      <button
+                        className="secondary"
+                        type="button"
+                        disabled={!!busy}
+                        onClick={() => void resetTableClick()}
+                      >
+                        {busy === "reset" ? "Reset…" : "Asztal törlése"}
                       </button>
                     </div>
                   </div>
@@ -2091,7 +2118,13 @@ export function App() {
         }}
       />
       <VoteBanner
-        show={!!tableMeta?.challenge && screen === "table" && !spectating}
+        show={
+          !!tableMeta?.challenge &&
+          screen === "table" &&
+          !spectating &&
+          tableMeta.status === "playing" &&
+          state?.status === "playing"
+        }
         challengeId={tableMeta?.challenge?.id ?? ""}
         proposerName={tableMeta?.challenge?.proposerName ?? ""}
         words={tableMeta?.challenge?.words ?? []}
