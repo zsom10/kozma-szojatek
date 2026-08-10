@@ -19,11 +19,15 @@ export function TurnBanner({
   const [key, setKey] = useState(0);
   const prevShow = useRef(false);
   const prevEpoch = useRef("");
+  const prevAway = useRef(false);
 
   useEffect(() => {
     const rising = show && (!prevShow.current || (epoch && epoch !== prevEpoch.current));
+    const leftAway = prevAway.current && !awayFromTable;
     prevShow.current = show;
+    prevAway.current = awayFromTable;
     if (epoch) prevEpoch.current = epoch;
+
     if (!show) {
       setVisible(false);
       return;
@@ -31,6 +35,10 @@ export function TurnBanner({
     if (awayFromTable) {
       setVisible(true);
       if (rising) setKey((k) => k + 1);
+      return;
+    }
+    if (leftAway) {
+      setVisible(false);
       return;
     }
     if (!rising) return;
@@ -52,7 +60,14 @@ export function TurnBanner({
       <div className="fx-turn-card">
         <strong>Te jössz{name ? `, ${name}` : ""}!</strong>
         {awayFromTable && onReturnToGame && (
-          <button type="button" className="fx-turn-btn" onClick={onReturnToGame}>
+          <button
+            type="button"
+            className="fx-turn-btn"
+            onClick={() => {
+              setVisible(false);
+              onReturnToGame();
+            }}
+          >
             Vissza a játékba
           </button>
         )}
